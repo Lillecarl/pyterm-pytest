@@ -21,8 +21,9 @@ from pathlib import Path
 #: window; nothing is placed against its edges.
 SCREEN = "1280x800x24"
 
-#: How long to wait for a window to appear, and for what it draws to
-#: stop changing.
+#: How long to wait for a window to appear, for the fence a relay
+#: touches when the keys are done, and for what it draws to stop
+#: changing.
 APPEAR_TIMEOUT = 20.0
 SETTLE_TIMEOUT = 15.0
 
@@ -145,6 +146,35 @@ class Seat:
     subject = "the picture"
 
 
+def wait_for_the_file(path, ended, what, log_path, timeout=APPEAR_TIMEOUT):
+    """
+    Wait for a file to appear, and give back what is left of the wait
+    once it is here, which is nothing: the fence has done the waiting.
+
+    The relay of a driving harness touches its fence when the program
+    has done with the keys, and the file is the evidence that the
+    frame on the screen is the one the keys asked for. A settle that
+    starts before them keeps the screen from before them and calls it
+    finished. Its absence after this long is a run that photographs
+    nothing, and this says so. Lillecarl/pymux#275.
+    """
+    deadline = time.time() + timeout
+    while not path.exists():
+        gone = ended()
+        if gone is not None:
+            raise RuntimeError(
+                "%s ended before %s appeared (exit %s)\n%s"
+                % (what, path, gone, _tail(log_path))
+            )
+        if time.time() >= deadline:
+            raise RuntimeError(
+                "waited %gs for %s, and it never came\n%s"
+                % (timeout, path, _tail(log_path))
+            )
+        time.sleep(0.2)
+    return 0.0
+
+
 def _settle(work, path, take_one, ended, what, log_path, not_before=0.0):
     """
     Take pictures until two in a row are the same, and keep the last.
@@ -153,12 +183,16 @@ def _settle(work, path, take_one, ended, what, log_path, not_before=0.0):
     fast one. `ended` gives back the exit code when whatever draws has
     gone, and `None` while it is still there.
 
-    `not_before` is for a run whose keys have not been pressed yet. A
-    screen that is waiting for a key is perfectly still, so two
-    pictures of it are the same and this would keep the screen from
-    before the keys and call it settled. Nothing that only writes bytes
-    needs it. Lillecarl/pymux#161.
+    `not_before` holds the settle off, for a run whose keys have not
+    been pressed yet: a number of seconds, or the file a relay touches
+    when they are done. A screen that is waiting for a key is perfectly
+    still, so two pictures of it are the same and this would keep the
+    screen from before the keys and call it settled. Nothing that only
+    writes bytes needs it. Lillecarl/pymux#161, Lillecarl/pymux#275.
     """
+    if isinstance(not_before, Path):
+        not_before = wait_for_the_file(not_before, ended, what, log_path)
+
     previous = work / "settle.png"
     started = time.time()
     deadline = started + SETTLE_TIMEOUT + not_before
