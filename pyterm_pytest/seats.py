@@ -4,15 +4,18 @@ The seats: a display server of its own, and how to take a picture on it.
 Moved here out of `pymux/tests/take_a_picture.py`, so that every
 suite that photographs a real terminal borrows the same two. An
 `XSeat` runs one Xvfb per run and finds windows with xdotool; a
-`WaylandSeat` runs one `cage` per picture and takes the output with
-`grim`. The settle loop asks pixels and not the clock; the fixed
+`WaylandSeat` runs one headless `sway` per picture, with a client
+of ours holding a virtual keyboard on the seat, and takes the output
+with `grim`. The settle loop asks pixels and not the clock; the fixed
 waits that are left are the ones a pixel question cannot answer, and
 Lillecarl/pymux#276 is the pass that narrows them further.
 """
 
 import os
+import shlex
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -111,14 +114,14 @@ class Seat:
 
     #: Whether this seat can read a fence. A fence is an OSC 52 in
     #: the clipboard of the outermost terminal, and the seat reads it
-    #: back through the display server it runs. The wayland seat
-    #: cannot read one yet, measured: cage offers no clipboard
-    #: protocol to a client, so wl-clipboard falls back to the core
-    #: data device and wants a keyboard the headless seat has none
-    #: of, and foot refuses an unfocused write even with its osc52
-    #: option on. The reader needs a virtual keyboard held beside the
-    #: compositor, and cage patched to offer the protocol.
-    #: Lillecarl/pymux#281.
+    #: back through the display server it runs. Both seats here can:
+    #: the X one with xclip, the wayland one with wl-paste over sway's
+    #: data-control device, which needs neither a popup nor a
+    #: keyboard. What the wayland reader needed measured out as three
+    #: walls -- cage offers no clipboard protocol at all,
+    #: wl-clipboard's core fallback wants a keyboard, and foot refuses
+    #: an unfocused write -- and a virtual keyboard held beside sway
+    #: is what got past the last of them. Lillecarl/pymux#281.
     reads_the_fence = False
 
     def clipboard(self) -> bytes:
@@ -459,26 +462,35 @@ class XSeat(Seat):
 
 class WaylandSeat(Seat):
     """
-    A kiosk compositor, one for each picture.
+    A compositor, one for each picture, arranged to be a kiosk.
 
-    `cage` runs a single application and gives it the whole output,
-    with no decoration of any kind. That is what this harness asks a
-    display server for, so there is no window to find and no geometry
-    to crop: `grim` takes the output, and the output is the terminal.
+    `sway` manages windows, and a configuration of three lines makes
+    it do what `cage` did: no borders, one output, and the terminal
+    as the only thing on it. The whole output is the terminal, so
+    `grim` takes the output and there is no geometry to crop. It
+    stays a kiosk the same way the fence reader arrived: sway offers
+    the clipboard protocol that cage never did, and a client of ours
+    holds a virtual keyboard on the seat, which is what gives the
+    terminal the focus its OSC 52 write demands.
 
     It renders with pixman. A build sandbox has no graphics card, and a
     software renderer draws the same pixels on every machine, which is
     what a comparison of pictures needs.
 
-    The compositor lives for one picture, because `cage` ends when the
-    application it runs ends. Each one gets a runtime directory of its
-    own, so the socket that appears in it is its own.
+    Each picture gets a runtime directory of its own, so the socket
+    that appears in it is its own. `sway` does not end when the
+    application it runs ends, the way `cage` does, so the wrapper
+    script it execs records the terminal's exit code, and `ended`
+    reads it: to the harness, whatever draws is still gone at the
+    same moment.
     """
 
     name = "wayland"
+    reads_the_fence = True
 
     def __init__(self):
         self._runs = 0
+        self._where = None
 
     def _room(self, work):
         self._runs += 1
@@ -519,14 +531,74 @@ class WaylandSeat(Seat):
             },
         )
 
+    def clipboard(self) -> bytes:
+        """
+        What the compositor's clipboard holds right now.
+
+        `sway` offers a client the data-control device, and
+        `wl-paste` reads through it without holding a surface and
+        without a keyboard, which is the whole reason the reader is
+        cheap here: the keyboard is only foot's gate, and wl-paste
+        needs none.
+        """
+        room, display = self._where
+        answer = subprocess.run(
+            ["wl-paste", "-t", "text/plain"],
+            capture_output=True,
+            timeout=5,
+            env={
+                **os.environ,
+                "XDG_RUNTIME_DIR": str(room),
+                "WAYLAND_DISPLAY": display,
+            },
+        )
+        return answer.stdout
+
+    def _wait_for_the_keyboard(self, room):
+        """
+        Wait until the holder has put its keyboard on the seat.
+
+        foot writes the fence only when it is focused, and the focus
+        arrives as a keyboard enter event that the compositor sends
+        only once the seat has a keyboard device. The holder prints
+        when it has one, and a run without that line is a run whose
+        fence will never come.
+        """
+        log = room / "holder.log"
+        deadline = time.time() + APPEAR_TIMEOUT
+        while time.time() < deadline:
+            if log.exists() and "keyboard" in log.read_text():
+                return
+            time.sleep(0.2)
+        raise RuntimeError(
+            "the keyboard never reached the seat\n%s" % _tail(log)
+        )
+
     subject = "the output"
 
     def running(self, terminal, command, work, log_path, director):
         room = self._room(work)
+        protocols = os.environ.get("PYTERM_WAYLAND_PROTOCOLS")
+        if protocols is None:
+            raise RuntimeError(
+                "PYTERM_WAYLAND_PROTOCOLS is not set: the wayland seat's "
+                "keyboard holder has no generated bindings to run with"
+            )
+        wrapper = room / "run.sh"
+        wrapper.write_text(
+            "%s\necho $? > %s\n"
+            % (shlex.join(terminal.argv(command)), room / "the-code")
+        )
+        config = room / "sway.conf"
+        config.write_text(
+            "default_border none\n"
+            "output HEADLESS-1 resolution 1024x768\n"
+            "exec /bin/sh %s\n" % (wrapper,)
+        )
 
         log = open(log_path, "wb")
         process = subprocess.Popen(
-            ["cage", "--"] + terminal.argv(command),
+            ["sway", "-c", str(config)],
             stdout=log,
             stderr=subprocess.STDOUT,
             env={
@@ -544,12 +616,38 @@ class WaylandSeat(Seat):
                 "DISPLAY": "",
             },
         )
+        holder = None
         try:
             display = self._wait_for_the_socket(room, process, log_path)
+            self._where = (room, display)
+            holder = subprocess.Popen(
+                [sys.executable, str(Path(__file__).parent / "virtual_keyboard.py")],
+                stdout=(room / "holder.log").open("wb"),
+                stderr=subprocess.STDOUT,
+                env={
+                    **os.environ,
+                    "XDG_RUNTIME_DIR": str(room),
+                    "WAYLAND_DISPLAY": display,
+                    "PYTHONPATH": protocols,
+                },
+            )
+            self._wait_for_the_keyboard(room)
+            code = room / "the-code"
+
+            def ended():
+                gone = process.poll()
+                if gone is not None:
+                    return gone
+                if code.exists():
+                    return int(code.read_text() or 0)
+                return None
+
             return director(
-                lambda where: self._take(room, display, where), process.poll
+                lambda where: self._take(room, display, where), ended
             )
         finally:
+            if holder is not None:
+                _end(holder)
             _end(process)
             log.close()
 

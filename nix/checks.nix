@@ -18,13 +18,19 @@
   callPackage,
   package,
   testSources,
+  pywayland,
+  waylandProtocols,
 }:
 let
   inherit (callPackage ./suite.nix { }) suite;
 
+  # pywayland is here because the seat's keyboard holder imports it,
+  # and the ceiling imports every module: what a module imports has to
+  # be on the path of the suite that judges it.
   pythonWithTests = python.withPackages (ps: [
     package
     pytest
+    pywayland
   ]);
 
   # Narrow a run to one file or one test while hunting:
@@ -40,6 +46,10 @@ let
     export HOME="$TMPDIR"
     export LANG=C.UTF-8
     export PYTHONDONTWRITEBYTECODE=1
+    # The holder's generated bindings, for the module that imports
+    # them; the runtime variable the seat reads carries the same.
+    export PYTHONPATH=${waylandProtocols}
+    export PYTERM_WAYLAND_PROTOCOLS=${waylandProtocols}
   '';
 in
 {

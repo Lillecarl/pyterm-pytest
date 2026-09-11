@@ -11,8 +11,31 @@
   buildPythonPackage,
   setuptools,
   callPackage,
+  runCommand,
+  wlroots,
+  wayland-scanner,
+  coreutils,
+  python,
 }:
 let
+  # The bindings the wayland seat's keyboard holder runs, generated
+  # from the protocol XMLs at build time. pywayland ships no wlr
+  # protocols, and its scanner cannot resolve a lone extension XML:
+  # the core namespace has to be in the same scan for `wl_seat` to
+  # resolve.
+  waylandProtocols = runCommand "pyterm-pytest-wayland-protocols" {
+    nativeBuildInputs = [ (python.withPackages (ps: [ ps.pywayland ])) ];
+    # The scanner wants pkg-config to find the core XML, which the
+    # command line names anyway, so the lookup is stopped instead of
+    # satisfied.
+    PKG_CONFIG = "${coreutils}/bin/false";
+  } ''
+    python -m pywayland.scanner -o $out/protocols -i \
+      ${wayland-scanner}/share/wayland/wayland.xml \
+      ${wlroots.src}/protocol/virtual-keyboard-unstable-v1.xml
+    touch $out/protocols/__init__.py
+  '';
+
   package = buildPythonPackage {
     pname = "pyterm-pytest";
     version = "0.1";
@@ -28,7 +51,7 @@ let
     doCheck = false;
     pythonImportsCheck = [ "pyterm_pytest" ];
 
-    passthru = { inherit checks; };
+    passthru = { inherit checks waylandProtocols; };
 
     meta = {
       description = "Test equipment for the pyterm collection: seats, drivers, budgets";
@@ -50,6 +73,11 @@ let
     ];
   };
 
-  checks = callPackage ./nix/checks.nix { inherit package testSources; };
+  checks = callPackage ./nix/checks.nix {
+    inherit package testSources waylandProtocols;
+    # There is no top-level `pywayland`; the python that builds this
+    # package carries its own.
+    pywayland = python.pkgs.pywayland;
+  };
 in
 package
