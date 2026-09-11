@@ -32,7 +32,8 @@ let
   } ''
     python -m pywayland.scanner -o $out/protocols -i \
       ${wayland-scanner}/share/wayland/wayland.xml \
-      ${wlroots.src}/protocol/virtual-keyboard-unstable-v1.xml
+      ${wlroots.src}/protocol/virtual-keyboard-unstable-v1.xml \
+      ${wlroots.src}/protocol/wlr-screencopy-unstable-v1.xml
     touch $out/protocols/__init__.py
   '';
 

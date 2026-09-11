@@ -179,6 +179,19 @@ class Seat:
             ),
         )
 
+    def burst_frames(self, terminal, command, work, path, log_path, frames):
+        """
+        `frames` pictures taken at fixed intervals.
+
+        The clock is all a seat that cannot hear the screen has: a
+        burst at fixed intervals samples whatever the screen was doing
+        at those moments, and a blink longer than the burst reads as no
+        blink at all. A seat that hears damage measures instead.
+        """
+        return self.picture_of(
+            terminal, command, work, path, log_path, frames=frames
+        )
+
     #: How a message names what this seat photographs. The X seat takes
     #: a picture of one window among several; the Wayland seat takes the
     #: whole output, because the compositor holds one window.
@@ -574,16 +587,118 @@ class WaylandSeat(Seat):
             "the keyboard never reached the seat\n%s" % _tail(log)
         )
 
-    subject = "the output"
-
-    def running(self, terminal, command, work, log_path, director):
-        room = self._room(work)
+    @staticmethod
+    def _generated_protocols():
+        "Where the generated bindings of the seat's clients live."
         protocols = os.environ.get("PYTERM_WAYLAND_PROTOCOLS")
         if protocols is None:
             raise RuntimeError(
                 "PYTERM_WAYLAND_PROTOCOLS is not set: the wayland seat's "
-                "keyboard holder has no generated bindings to run with"
+                "clients have no generated bindings to run with"
             )
+        return protocols
+
+    def running(self, terminal, command, work, log_path, director):
+        def body(room, display, ended):
+            return director(
+                lambda where: self._take(room, display, where), ended
+            )
+
+        return self._run(terminal, command, work, log_path, body)
+
+    def burst_frames(self, terminal, command, work, path, log_path, frames):
+        """
+        `frames` pictures taken when the screen changes, not when the
+        clock says so.
+
+        The default is a burst at fixed intervals, which is the only
+        thing a seat that cannot hear the screen can do. This seat
+        hears it: screencopy's copy-with-damage holds a copy back until
+        pixels change, so every frame is a moment something moved, and
+        a cursor that blinks slowly is no longer mistaken for one that
+        never blinks.
+        """
+
+        def body(room, display, ended):
+            return self._frames_on_damage(room, display, path, frames)
+
+        return self._run(terminal, command, work, log_path, body)
+
+    def _frames_on_damage(self, room, display, path, frames):
+        # Beside the pictures, not in the compositor's room: a run
+        # that leaves its logs behind leaves them where the reader of
+        # the run looks. One per side: both sides of a comparison use
+        # this room, and their frames must not mix.
+        capture = path.parent / ("capture-%s" % path.stem)
+        capture.mkdir()
+        log = open(path.parent / "capture.log", "wb")
+        client = subprocess.Popen(
+            [
+                sys.executable,
+                str(Path(__file__).parent / "capture_on_damage.py"),
+                str(capture),
+                str(frames),
+            ],
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            env={
+                **os.environ,
+                "XDG_RUNTIME_DIR": str(room),
+                "WAYLAND_DISPLAY": display,
+                "PYTHONPATH": self._generated_protocols(),
+            },
+        )
+        try:
+            client.wait(timeout=frames * 5 + 20)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                "the capture did not end\n%s" % _tail(path.parent / "capture.log")
+            ) from None
+        finally:
+            if client.poll() is None:
+                _end(client)
+            log.close()
+
+        raws = sorted(capture.glob("frame.*.rgba"))
+        if not raws:
+            raise RuntimeError(
+                "the screen never changed\n%s"
+                % _tail(path.parent / "capture.log")
+            )
+        meta = (capture / "meta").read_text().split()
+        width, height, inverted = int(meta[0]), int(meta[1]), meta[2] == "1"
+        shots = []
+        for number, raw in enumerate(raws):
+            shot = path.with_name("%s.%d.png" % (path.stem, number))
+            # The settings that come before the file change how the
+            # raw reader reads it: alpha off first makes imagemagick
+            # read three bytes a pixel and the file half makes no
+            # sense. The reader is told nothing but the geometry.
+            convert = [
+                "magick",
+                "-size",
+                "%dx%d" % (width, height),
+                "-depth",
+                "8",
+                "bgra:%s" % raw,
+            ]
+            if inverted:
+                convert.append("-flip")
+            convert += ["-alpha", "off", str(shot)]
+            answer = subprocess.run(
+                convert, capture_output=True, timeout=60
+            )
+            if answer.returncode:
+                raise RuntimeError(
+                    "the picture did not convert: %s"
+                    % answer.stderr.decode().strip()
+                )
+            shots.append(shot)
+        return shots
+
+    def _run(self, terminal, command, work, log_path, body):
+        room = self._room(work)
+        protocols = self._generated_protocols()
         wrapper = room / "run.sh"
         wrapper.write_text(
             "%s\necho $? > %s\n"
@@ -642,9 +757,7 @@ class WaylandSeat(Seat):
                     return int(code.read_text() or 0)
                 return None
 
-            return director(
-                lambda where: self._take(room, display, where), ended
-            )
+            return body(room, display, ended)
         finally:
             if holder is not None:
                 _end(holder)
@@ -684,3 +797,38 @@ def differences(first, second, into=None):
         return int(float(text[0]))
     except ValueError:
         raise RuntimeError("compare said %r" % answer.stderr.decode())
+
+
+def changed_region(first, second, into):
+    """
+    The box that holds every pixel that differs, as (x, y, w, h).
+
+    The count comes with it: (0, None) is two pictures that agree.
+    The box is what says whether two changes are the same change --
+    a cursor that blinks changes one cell, twice, and every other
+    movement moves something else.
+    """
+    count = differences(first, second, into)
+    if not count:
+        return 0, None
+    answer = subprocess.run(
+        ["magick", str(into), "-format", "%@", "info:"],
+        capture_output=True,
+        timeout=60,
+    )
+    shape = answer.stdout.decode().strip()
+    size, _, offset = shape.partition("+")
+    width, _, height = size.partition("x")
+    x, _, y = offset.partition("+")
+    return count, (int(x), int(y), int(width), int(height))
+
+
+def fully_overlaps(first, second):
+    "Whether one of two boxes holds the other entirely."
+    fx, fy, fw, fh = first
+    sx, sy, sw, sh = second
+    width = min(fx + fw, sx + sw) - max(fx, sx)
+    height = min(fy + fh, sy + sh) - max(fy, sy)
+    if width <= 0 or height <= 0:
+        return False
+    return width * height == min(fw * fh, sw * sh)
