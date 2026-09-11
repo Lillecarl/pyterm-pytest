@@ -109,6 +109,30 @@ class Seat:
         """
         raise NotImplementedError
 
+    #: Whether this seat can read a fence. A fence is an OSC 52 in
+    #: the clipboard of the outermost terminal, and the seat reads it
+    #: back through the display server it runs. The wayland seat
+    #: cannot read one yet, measured: cage offers no clipboard
+    #: protocol to a client, so wl-clipboard falls back to the core
+    #: data device and wants a keyboard the headless seat has none
+    #: of, and foot refuses an unfocused write even with its osc52
+    #: option on. The reader needs a virtual keyboard held beside the
+    #: compositor, and cage patched to offer the protocol.
+    #: Lillecarl/pymux#281.
+    reads_the_fence = False
+
+    def clipboard(self) -> bytes:
+        """
+        What the display server's clipboard holds right now.
+
+        The fence of a picture is an OSC 52, the clipboard escape: the
+        outermost terminal has acted on a fixture's bytes exactly when
+        it put the fence's token in the clipboard, and the terminal is
+        the thing the picture is of. Only a fence asks, so this never
+        runs while a picture waits on anything else.
+        """
+        raise NotImplementedError
+
     def picture_of(
         self, terminal, command, work, path, log_path, frames=1, not_before=0.0
     ):
@@ -119,8 +143,13 @@ class Seat:
         screen to settle, and gives back the list of pictures.
 
         `not_before` holds the settle off, for a run whose keys have
-        not been pressed yet. `_settle` says why.
+        not been pressed yet: a number of seconds, the file a relay
+        touches, or the token a fixture's fence put in the clipboard.
+        `_settle` says why.
         """
+        if isinstance(not_before, str) and not self.reads_the_fence:
+            raise RuntimeError("the %s seat has no reader for the fence" % self.name)
+
         what = "%s of %s" % (self.subject, terminal.name)
         if frames > 1:
             return self.running(
@@ -136,7 +165,14 @@ class Seat:
             work,
             log_path,
             lambda take_one, ended: _settle(
-                work, path, take_one, ended, what, log_path, not_before
+                work,
+                path,
+                take_one,
+                ended,
+                what,
+                log_path,
+                not_before,
+                self.clipboard if isinstance(not_before, str) else None,
             ),
         )
 
@@ -175,7 +211,35 @@ def wait_for_the_file(path, ended, what, log_path, timeout=APPEAR_TIMEOUT):
     return 0.0
 
 
-def _settle(work, path, take_one, ended, what, log_path, not_before=0.0):
+def wait_for_the_clipboard(
+    read_the_clipboard, token, ended, what, log_path, timeout=APPEAR_TIMEOUT
+):
+    """
+    Wait for the display server's clipboard to hold the token.
+
+    The clipboard only changes when the outermost terminal has acted
+    on the bytes, and the terminal is the thing the picture is of: a
+    fence the terminal never took is a run that photographs nothing,
+    and this says so. Lillecarl/pymux#281.
+    """
+    deadline = time.time() + timeout
+    while token.encode() not in read_the_clipboard():
+        gone = ended()
+        if gone is not None:
+            raise RuntimeError(
+                "%s ended before the fence came (exit %s)\n%s"
+                % (what, gone, _tail(log_path))
+            )
+        if time.time() >= deadline:
+            raise RuntimeError(
+                "waited %gs for the fence, and the terminal never took it\n%s"
+                % (timeout, _tail(log_path))
+            )
+        time.sleep(0.1)
+    return 0.0
+
+
+def _settle(work, path, take_one, ended, what, log_path, not_before=0.0, clipboard=None):
     """
     Take pictures until two in a row are the same, and keep the last.
 
@@ -184,13 +248,19 @@ def _settle(work, path, take_one, ended, what, log_path, not_before=0.0):
     gone, and `None` while it is still there.
 
     `not_before` holds the settle off, for a run whose keys have not
-    been pressed yet: a number of seconds, or the file a relay touches
-    when they are done. A screen that is waiting for a key is perfectly
-    still, so two pictures of it are the same and this would keep the
-    screen from before the keys and call it settled. Nothing that only
-    writes bytes needs it. Lillecarl/pymux#161, Lillecarl/pymux#275.
+    been pressed yet: a number of seconds, the file a relay touches
+    when they are done, or the token a fixture's fence put in the
+    clipboard of the display server. A screen that is waiting for a
+    key is perfectly still, so two pictures of it are the same and
+    this would keep the screen from before the keys and call it
+    settled. Nothing that only writes bytes needs it.
+    Lillecarl/pymux#161, Lillecarl/pymux#275, Lillecarl/pymux#281.
     """
-    if isinstance(not_before, Path):
+    if isinstance(not_before, str):
+        not_before = wait_for_the_clipboard(
+            clipboard, not_before, ended, what, log_path
+        )
+    elif isinstance(not_before, Path):
         not_before = wait_for_the_file(not_before, ended, what, log_path)
 
     previous = work / "settle.png"
@@ -340,6 +410,26 @@ class XSeat(Seat):
             capture_output=True,
             timeout=30,
         )
+
+    def clipboard(self) -> bytes:
+        try:
+            answer = subprocess.run(
+                [
+                    "xclip",
+                    "-o",
+                    "-selection",
+                    "clipboard",
+                    "-display",
+                    self.number,
+                ],
+                capture_output=True,
+                timeout=10,
+            )
+        except subprocess.TimeoutExpired:
+            return b""
+        return answer.stdout
+
+    reads_the_fence = True
 
     subject = "the window"
 
