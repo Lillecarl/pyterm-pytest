@@ -1,3 +1,44 @@
+# What pyterm-pytest is and what it needs. `setup.py` used to say this, and a
+# build read it by running it. Nix reads this file instead, at evaluation
+# time, so the dependency list here is the one the package is built from and
+# there is no second copy in a `.nix` file to fall out of step.
+# Lillecarl/pymux#319.
+[project]
+name = "pyterm-pytest"
+version = "0.1"
+description = "Test equipment for the pyterm collection: seats, drivers, budgets."
+readme = "README.md"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+# The floor is per module: most of this package imports the standard
+# library alone, the driver takes `ptyhost` when it lands, and nothing
+# imports a layer above that. README.md says why.
+dependencies = []
+
+[project.optional-dependencies]
+# What a check installs, beside what pyterm-pytest itself needs.
+#
+# pywayland is here and not in `dependencies` for the reason the ceiling
+# exists: the seat's keyboard holder imports it, and nothing else in this
+# package does. The ceiling imports every module, so the suite that judges
+# it needs pywayland on the path -- and a repository that only wants a seat
+# fixture should not install a Wayland binding to get one.
+test = [
+    "pytest",
+    "pywayland",
+]
+
+[project.urls]
+Homepage = "https://github.com/Lillecarl/pyterm-pytest"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["pyterm_pytest"]
+
 [tool.ruff]
 target-version = "py310"
 select = [

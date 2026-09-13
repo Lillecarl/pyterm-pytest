@@ -3,7 +3,7 @@
 # It declares its own inputs, so `default.nix` holds the package and carries
 # nothing that only a test needs.
 #
-# `package` and `testSources` come from `default.nix`: the first because a
+# `testEnv` and `testSources` come from `default.nix`: the first because a
 # suite runs against the installed package, the second because it knows where
 # the repository root is and this file does not.
 #
@@ -13,25 +13,19 @@
 #
 # `nix/suite.nix` says why a check is two derivations.
 {
-  python,
-  pytest,
+  # The python the suite runs on: a virtualenv of pyterm-pytest, what it
+  # declares, and its `test` extra. That extra carries pywayland, because
+  # the seat's keyboard holder imports it and the ceiling imports every
+  # module: what a module imports has to be on the path of the suite that
+  # judges it. `default.nix` builds this from `pyproject.toml`, so there is
+  # no second list here. Lillecarl/pymux#319.
+  testEnv,
   callPackage,
-  package,
   testSources,
-  pywayland,
   waylandProtocols,
 }:
 let
   inherit (callPackage ./suite.nix { }) suite;
-
-  # pywayland is here because the seat's keyboard holder imports it,
-  # and the ceiling imports every module: what a module imports has to
-  # be on the path of the suite that judges it.
-  pythonWithTests = python.withPackages (ps: [
-    package
-    pytest
-    pywayland
-  ]);
 
   # Narrow a run to one file or one test while hunting:
   #
@@ -55,7 +49,7 @@ in
 {
   unit = suite {
     name = "pyterm-pytest-unit";
-    inputs = [ pythonWithTests ];
+    inputs = [ testEnv ];
     env = { inherit selection; };
     setup = prepare;
   } "python -m pytest $selection -q -p no:cacheprovider";
