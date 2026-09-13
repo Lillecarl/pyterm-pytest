@@ -7,7 +7,7 @@ of them need the same thing:
 
 * **Seats** -- a real terminal on a display server of its own: Xvfb for
   xterm, a kiosk compositor for foot and kitty, and how to photograph
-  either. It moves here from `pymux/tests/take_a_picture.py`.
+  either. It moves here from `pymux/tests/take_picture.py`.
   Lillecarl/pymux#276.
 * **Drivers** -- run a program on a pty, press keys at it, and fence
   the moment its work is done. Built on `ptyhost`, never around it.

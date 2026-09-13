@@ -1,7 +1,7 @@
 """
 The seats: a display server of its own, and how to take a picture on it.
 
-Moved here out of `pymux/tests/take_a_picture.py`, so that every
+Moved here out of `pymux/tests/take_picture.py`, so that every
 suite that photographs a real terminal borrows the same two. An
 `XSeat` runs one Xvfb per run and finds windows with xdotool; a
 `WaylandSeat` runs one headless `sway` per picture, with a client
@@ -122,7 +122,7 @@ class Seat:
     #: wl-clipboard's core fallback wants a keyboard, and foot refuses
     #: an unfocused write -- and a virtual keyboard held beside sway
     #: is what got past the last of them. Lillecarl/pymux#281.
-    reads_the_fence = False
+    reads_fence = False
 
     def clipboard(self) -> bytes:
         """
@@ -150,7 +150,7 @@ class Seat:
         touches, or the token a fixture's fence put in the clipboard.
         `_settle` says why.
         """
-        if isinstance(not_before, str) and not self.reads_the_fence:
+        if isinstance(not_before, str) and not self.reads_fence:
             raise RuntimeError("the %s seat has no reader for the fence" % self.name)
 
         what = "%s of %s" % (self.subject, terminal.name)
@@ -445,7 +445,7 @@ class XSeat(Seat):
             return b""
         return answer.stdout
 
-    reads_the_fence = True
+    reads_fence = True
 
     subject = "the window"
 
@@ -499,7 +499,7 @@ class WaylandSeat(Seat):
     """
 
     name = "wayland"
-    reads_the_fence = True
+    reads_fence = True
 
     def __init__(self):
         self._runs = 0
