@@ -41,6 +41,70 @@ BLINK_GAP = 0.25
 #: it never settles, and that is the whole point of the measurement.
 BLINK_START = 2.0
 
+#: What a suite exits with to say "this is not my answer".
+#:
+#: A suite that ran and disliked what it saw is an answer, and nix
+#: keeps it: the log is the evidence, which is why a check is two
+#: derivations at all. **A suite whose display server never came up is
+#: not**, and a cached one of those cannot be cleared -- `--rebuild`
+#: re-runs the suite and then throws the new output away, because it
+#: compares rather than replaces, so the only way back to a green gate
+#: is deleting the output and its referrers from the store by hand.
+#: That cost two sessions an hour each.
+#:
+#: `pyte/nix/suite.nix` fails the run derivation on this code alone,
+#: so nix keeps nothing and the next build tries again. It passes the
+#: number in, so the two cannot drift; the literal is for a run
+#: started outside nix. Lillecarl/pymux#216.
+COULD_NOT_RUN = int(os.environ.get("PYTERM_COULD_NOT_RUN") or 97)
+
+
+class TheSeatIsGone(RuntimeError):
+    """
+    The display server this run draws on is not there any more.
+
+    Every picture after it fails the same way, so a run that meets one
+    stops rather than working through the rest of its fixtures to
+    report the same thing each time.
+    """
+
+
+def open_the_seats(terminals, work):
+    """
+    One seat for each kind of display server these terminals need.
+
+    A seat that will not start is not a verdict on anything, so the
+    failure is `TheSeatIsGone` and not whatever the display server
+    said. Lillecarl/pymux#216.
+    """
+    seats = {}
+    for terminal in terminals:
+        if terminal.seat in seats:
+            continue
+        try:
+            seats[terminal.seat] = SEATS[terminal.seat]().start(work)
+        except Exception as reason:
+            for seat in seats.values():
+                seat.stop()
+            raise TheSeatIsGone(
+                "the %s seat would not start: %s" % (terminal.seat, reason)
+            ) from reason
+    return seats
+
+
+def with_no_answer(reason):
+    """
+    Say that this run has no answer, and give the code that says so.
+
+    A `main` returns this, and `pyte/nix/suite.nix` fails the run
+    derivation on it, so nix keeps nothing and the next build tries
+    again. Lillecarl/pymux#216.
+    """
+    print("")
+    print("This run has no answer. %s" % (reason,), flush=True)
+    print("Nothing is kept, so the next build runs it again.", flush=True)
+    return COULD_NOT_RUN
+
 
 # ----------------------------------------------------------------------
 # The seats: a display server, and how to take a picture on it.
@@ -94,6 +158,12 @@ class Seat:
         Lillecarl/pymux#216.
         """
         return ""
+
+    def still_there(self):
+        "Raise `TheSeatIsGone` when this seat cannot be drawn on."
+        trouble = self.trouble()
+        if trouble:
+            raise TheSeatIsGone(trouble)
 
     def running(self, terminal, command, work, log_path, director):
         """
