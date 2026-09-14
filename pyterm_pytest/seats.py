@@ -1010,6 +1010,54 @@ def changed_region(first, second, into):
     return count, (left, top, right - left, bottom - top)
 
 
+class NothingToCompare(RuntimeError):
+    "Two drawings that cannot be lined up, and why."
+
+
+def _drawn_part(path):
+    "What a picture draws, cut out of the background it draws it on."
+    picture = Image.open(path).convert("RGB")
+    box = picture.getbbox()
+    if box is None:
+        raise NothingToCompare("%s draws nothing at all" % (path,))
+    return picture.crop(box), box
+
+
+def the_same_drawing(first, second, into=None):
+    """
+    How many pixels differ between what two pictures draw, wherever
+    each of them drew it.
+
+    **This is the comparison that may cross two terminals**, and it is
+    the only one. Two terminals draw their own glyphs from their own
+    font stacks, so comparing text between them says nothing. An image
+    has no glyphs: the pixels are the program's, and a terminal that
+    draws them somewhere else on its output is still drawing the same
+    picture. So each drawing is cut out of its background first and the
+    two cuts are compared.
+
+    `getbbox` finds the cut, so the background has to be black, which
+    is what the picture harness asks every terminal for.
+
+    Raises `NothingToCompare` when the two drawings are not the same
+    size. Then there is nothing to line up and a count would be a
+    number with no meaning -- the cell of one terminal has moved, or a
+    font has, and somebody has to look.
+    """
+    one, first_box = _drawn_part(first)
+    two, second_box = _drawn_part(second)
+    if one.size != two.size:
+        raise NothingToCompare(
+            "%s draws %dx%d and %s draws %dx%d, so the two do not line up"
+            % (first, one.width, one.height, second, two.width, two.height)
+        )
+
+    moved = _what_moved(ImageChops.difference(one, two))
+    if into is not None:
+        _draw_what_moved(one, moved, into)
+    return sum(moved.histogram()[1:]), first_box, second_box
+
+
 def fully_overlaps(first, second):
     "Whether one of two boxes holds the other entirely."
     fx, fy, fw, fh = first

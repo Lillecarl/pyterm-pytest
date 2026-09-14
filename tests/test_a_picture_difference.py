@@ -10,9 +10,15 @@ all the ink and not what moved (Lillecarl/pymux#370).
 Each fault has a test here that fails on the old answer.
 """
 
+import pytest
 from PIL import Image
 
-from pyterm_pytest.seats import changed_region, differences
+from pyterm_pytest.seats import (
+    NothingToCompare,
+    changed_region,
+    differences,
+    the_same_drawing,
+)
 
 
 def picture(path, size=(20, 10), fill=(0, 0, 0), marks=()):
@@ -98,3 +104,61 @@ def test_the_picture_of_the_difference_marks_what_moved(tmp_path):
     assert drawn.getpixel((5, 5)) == (255, 0, 0)
     # And what did not move is still there to look at, only dimmer.
     assert drawn.getpixel((0, 0)) == (50, 50, 50)
+
+
+#: The picture two terminals drew of one image. The same four pixels,
+#: in different corners of differently sized outputs, because a
+#: compositor gives one terminal the whole screen and the other centres
+#: its cells in it.
+DRAWING = [((0, 0, 2, 2), (255, 0, 0)), ((2, 0, 2, 2), (0, 204, 51))]
+
+
+def test_one_drawing_in_two_places_is_the_same_drawing(tmp_path):
+    "Where a terminal put it is not a difference. Lillecarl/pymux#262."
+    moved = [
+        ((box[0] + 7, box[1] + 3, box[2], box[3]), colour) for box, colour in DRAWING
+    ]
+    one = picture(tmp_path / "one.png", size=(20, 10), marks=DRAWING)
+    two = picture(tmp_path / "two.png", size=(30, 14), marks=moved)
+
+    count, first_box, second_box = the_same_drawing(one, two, tmp_path / "d.png")
+    assert count == 0
+    assert first_box == (0, 0, 4, 2)
+    assert second_box == (7, 3, 11, 5)
+
+
+def test_a_drawing_that_differs_is_counted_where_it_differs(tmp_path):
+    one = picture(tmp_path / "one.png", size=(20, 10), marks=DRAWING)
+    two = picture(
+        tmp_path / "two.png",
+        size=(20, 10),
+        marks=DRAWING + [((3, 1, 1, 1), (255, 204, 0))],
+    )
+
+    count, _first, _second = the_same_drawing(one, two)
+    assert count == 1
+
+
+def test_two_drawings_of_different_sizes_are_not_compared(tmp_path):
+    """
+    A count would be a number with no meaning. The cell of one terminal
+    has moved, or a font has, and somebody has to look.
+    """
+    one = picture(tmp_path / "one.png", size=(20, 10), marks=DRAWING)
+    two = picture(
+        tmp_path / "two.png", size=(20, 10), marks=[((0, 0, 4, 3), (255, 0, 0))]
+    )
+
+    with pytest.raises(NothingToCompare) as raised:
+        the_same_drawing(one, two)
+    assert "4x2" in str(raised.value) and "4x3" in str(raised.value)
+
+
+def test_a_picture_that_draws_nothing_says_so(tmp_path):
+    "A terminal that drew no image is not a drawing of zero pixels."
+    one = picture(tmp_path / "one.png", size=(20, 10), marks=DRAWING)
+    two = picture(tmp_path / "two.png", size=(20, 10))
+
+    with pytest.raises(NothingToCompare) as raised:
+        the_same_drawing(one, two)
+    assert "draws nothing at all" in str(raised.value)
