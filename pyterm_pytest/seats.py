@@ -324,9 +324,17 @@ def _settle(
             raise RuntimeError("%s: %s\n%s" % (what, reason, _tail(log_path)))
 
     previous = work / "settle.png"
+    #: The older of the last pair that differed, and where they did.
+    #: `previous` cannot be either: the loop copies the new picture
+    #: over it, so the two kept frames were the same image every time
+    #: and "what moved" showed nothing. Lillecarl/pymux#362.
+    differed = work / "settle-differed.png"
+    difference = work / "settle-difference.png"
+
     started = time.time()
     deadline = started + SETTLE_TIMEOUT + not_before
     take_one(previous)
+    box = None
     while time.time() < deadline:
         time.sleep(0.4)
         gone = ended()
@@ -336,17 +344,35 @@ def _settle(
                 % (what, gone, _tail(log_path))
             )
         take_one(path)
-        if differences(previous, path) == 0 and time.time() - started >= not_before:
+        count, box = changed_region(previous, path, difference)
+        if count == 0 and time.time() - started >= not_before:
             return
+        shutil.copy(previous, differed)
         shutil.copy(path, previous)
+
     # What would not settle, left where a person reads the logs: the
-    # last two frames that kept differing, so "never settled" says
-    # what moved and not only that it moved.
+    # last two frames that kept differing, and the pixels between
+    # them. The box is the whole of "what moved" -- one cell says a
+    # cursor, and the width of the screen says a redraw.
     if log_path is not None:
         room = Path(log_path).parent
-        shutil.copy(previous, room / "settle-previous.png")
-        shutil.copy(path, room / "settle-last.png")
-    raise RuntimeError("%s never settled\n%s" % (what, _tail(log_path)))
+        for one, name in (
+            (differed, "settle-previous.png"),
+            (Path(path), "settle-last.png"),
+            (difference, "settle-difference.png"),
+        ):
+            if one.exists():
+                shutil.copy(one, room / name)
+    raise RuntimeError(
+        "%s never settled: %s\n%s"
+        % (
+            what,
+            "%dx%d at %d,%d kept changing" % (box[2], box[3], box[0], box[1])
+            if box
+            else "nothing to compare",
+            _tail(log_path),
+        )
+    )
 
 
 def _burst(path, take_one, ended, what, log_path):
