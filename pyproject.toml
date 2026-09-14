@@ -14,7 +14,15 @@ requires-python = ">=3.10"
 # The floor is per module: most of this package imports the standard
 # library alone, the driver takes `ptyhost` when it lands, and nothing
 # imports a layer above that. README.md says why.
-dependencies = []
+#
+# Pillow is here and not in the `test` extra below, because judging a
+# picture is what a seat is for: `seats.differences` is the answer every
+# picture check reads. It replaced `compare -metric AE`, which counts
+# nothing (Lillecarl/pymux#368), and a library that hands over the
+# pixels is the only way to be sure what was measured.
+dependencies = [
+    "pillow",
+]
 
 [project.optional-dependencies]
 # What a check installs, beside what pyterm-pytest itself needs.

@@ -19,6 +19,8 @@ import sys
 import time
 from pathlib import Path
 
+from PIL import Image, ImageChops
+
 
 #: The screen of the X server. It only has to be larger than the
 #: window; nothing is placed against its edges.
@@ -920,23 +922,70 @@ SEATS = {
 }
 
 
+def _the_difference(first, second):
+    """
+    The first picture, and where the second differs from it.
+
+    The two are cropped to the rectangle they share. **They are not
+    always the same size.** vttest asks for 132 columns and xterm
+    answers by making its window wider; a pane has the cells the user
+    gave it and cannot, so one picture of that screen is 1280 pixels
+    across and the other is 800. The shared rectangle is the
+    comparison, and the width itself is not a difference.
+    """
+    one = Image.open(first).convert("RGB")
+    two = Image.open(second).convert("RGB")
+    if one.size != two.size:
+        shared = (0, 0, min(one.width, two.width), min(one.height, two.height))
+        one, two = one.crop(shared), two.crop(shared)
+    return one, ImageChops.difference(one, two)
+
+
+def _what_moved(difference):
+    """
+    One band, holding the largest of the three differences of a pixel.
+
+    **Not `convert("L")`**, which weighs the bands the way an eye sees
+    them: a pixel that differs in blue alone weighs 0.07 of that
+    difference and rounds away to nothing. Weighing a difference
+    instead of counting it is what Lillecarl/pymux#368 was.
+    """
+    red, green, blue = difference.split()
+    return ImageChops.lighter(ImageChops.lighter(red, green), blue)
+
+
+def _draw_what_moved(one, moved, into):
+    "The first picture faded, with every pixel that moved in red."
+    faded = Image.eval(one, lambda value: value // 4)
+    marked = Image.new("RGB", one.size, (255, 0, 0))
+    Image.composite(marked, faded, moved.point(bool, mode="1")).save(into)
+
+
+def _measured(first, second, into):
+    "How many pixels moved, and the band that says which."
+    one, difference = _the_difference(first, second)
+    moved = _what_moved(difference)
+    if into is not None:
+        _draw_what_moved(one, moved, into)
+    # Every value above zero is a pixel that differs in some band.
+    return sum(moved.histogram()[1:]), moved
+
+
 def differences(first, second, into=None):
     """
     How many pixels differ between two pictures.
 
-    `compare` writes the count on stderr and exits non zero when there
-    is one, so the count is what this reads and not the exit code.
+    **Counted, and not weighed.** `compare -metric AE` stood here and
+    its own documentation calls it a count of pixels. It is not: in
+    ImageMagick 7.1.2 it sums the channel error of the whole picture,
+    normalised, so `rgb(255,0,0)` and `rgb(0,204,51)` against black both
+    answer 255/765 of the pixels, and `rgb(1,0,0)` answers 1/765 of
+    them. Every pixel of all three differs. A small difference over few
+    pixels therefore counted as none at all, and `_settle` calls a
+    screen still on that answer. Lillecarl/pymux#368.
     """
-    command = ["compare", "-metric", "AE", str(first), str(second)]
-    command.append(str(into) if into is not None else "null:")
-    answer = subprocess.run(command, capture_output=True, timeout=60)
-    text = answer.stderr.decode().strip().split()
-    if not text:
-        raise RuntimeError("compare said nothing: %r" % answer.stderr)
-    try:
-        return int(float(text[0]))
-    except ValueError:
-        raise RuntimeError("compare said %r" % answer.stderr.decode())
+    count, _moved = _measured(first, second, into)
+    return count
 
 
 def changed_region(first, second, into):
@@ -947,20 +996,18 @@ def changed_region(first, second, into):
     The box is what says whether two changes are the same change --
     a cursor that blinks changes one cell, twice, and every other
     movement moves something else.
+
+    **The box is of what moved and not of what is drawn.** It was
+    `magick <into> -format %@`, the trim of the picture `compare`
+    wrote, which is a faded copy of the first picture with the
+    differences marked on it -- so the trim held all the ink and the
+    same box came back whatever had moved. Lillecarl/pymux#370.
     """
-    count = differences(first, second, into)
+    count, moved = _measured(first, second, into)
     if not count:
         return 0, None
-    answer = subprocess.run(
-        ["magick", str(into), "-format", "%@", "info:"],
-        capture_output=True,
-        timeout=60,
-    )
-    shape = answer.stdout.decode().strip()
-    size, _, offset = shape.partition("+")
-    width, _, height = size.partition("x")
-    x, _, y = offset.partition("+")
-    return count, (int(x), int(y), int(width), int(height))
+    left, top, right, bottom = moved.getbbox()
+    return count, (left, top, right - left, bottom - top)
 
 
 def fully_overlaps(first, second):
