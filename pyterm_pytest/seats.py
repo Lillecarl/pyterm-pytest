@@ -137,7 +137,15 @@ class Seat:
         raise NotImplementedError
 
     def picture_of(
-        self, terminal, command, work, path, log_path, frames=1, not_before=0.0
+        self,
+        terminal,
+        command,
+        work,
+        path,
+        log_path,
+        frames=1,
+        not_before=0.0,
+        judge=None,
     ):
         """
         Run one command in one terminal and leave its picture at `path`.
@@ -149,9 +157,18 @@ class Seat:
         not been pressed yet: a number of seconds, the file a relay
         touches, or the token a fixture's fence put in the clipboard.
         `_settle` says why.
+
+        `judge` reads the state of the program once that wait is over
+        and raises when it is not the state the keys asked for.
+        `_settle` says why a picture needs one.
         """
         if isinstance(not_before, str) and not self.reads_fence:
             raise RuntimeError("the %s seat has no reader for the fence" % self.name)
+        if judge is not None and not isinstance(not_before, (str, Path)):
+            # A judge reads the state after the wait, so a wait with no
+            # evidence in it would have it read the state from before
+            # the keys and pass.
+            raise RuntimeError("a judge needs a fence to read the state after")
 
         what = "%s of %s" % (self.subject, terminal.name)
         if frames > 1:
@@ -176,6 +193,7 @@ class Seat:
                 log_path,
                 not_before,
                 self.clipboard if isinstance(not_before, str) else None,
+                judge,
             ),
         )
 
@@ -255,7 +273,17 @@ def wait_for_the_clipboard(
     return 0.0
 
 
-def _settle(work, path, take_one, ended, what, log_path, not_before=0.0, clipboard=None):
+def _settle(
+    work,
+    path,
+    take_one,
+    ended,
+    what,
+    log_path,
+    not_before=0.0,
+    clipboard=None,
+    judge=None,
+):
     """
     Take pictures until two in a row are the same, and keep the last.
 
@@ -271,6 +299,16 @@ def _settle(work, path, take_one, ended, what, log_path, not_before=0.0, clipboa
     this would keep the screen from before the keys and call it
     settled. Nothing that only writes bytes needs it.
     Lillecarl/pymux#161, Lillecarl/pymux#275, Lillecarl/pymux#281.
+
+    `judge` reads the state of the program once that wait is over.
+    **The fence proves the program finished the keys, never that a key
+    arrived.** A key that reached nothing leaves a program that is
+    finished with an empty list, and the fence comes back through a
+    pane that is alive either way: one run of a two pane fixture drew
+    one pane and stayed green, because a picture of the wrong state is
+    still a picture. So the state is asked for and compared, and a
+    wrong one is a red run with no picture kept.
+    Lillecarl/pymux#353.
     """
     if isinstance(not_before, str):
         not_before = wait_for_the_clipboard(
@@ -278,6 +316,12 @@ def _settle(work, path, take_one, ended, what, log_path, not_before=0.0, clipboa
         )
     elif isinstance(not_before, Path):
         not_before = wait_for_the_file(not_before, ended, what, log_path)
+
+    if judge is not None:
+        try:
+            judge()
+        except Exception as reason:
+            raise RuntimeError("%s: %s\n%s" % (what, reason, _tail(log_path)))
 
     previous = work / "settle.png"
     started = time.time()
