@@ -16,6 +16,7 @@ from pyterm_pytest.seats import (
     Seat,
     TheSeatIsGone,
     XSeat,
+    kiosk_configuration,
     open_the_seats,
     why_the_display_refuses,
     with_no_answer,
@@ -249,6 +250,17 @@ def test_a_server_that_runs_and_serves_is_not(tmp_path):
         seat.still_there()
     finally:
         door.close()
+
+
+def test_the_wayland_seat_starts_no_x_server():
+    """
+    wlroots opens an X display as soon as the compositor starts, before
+    it has a client for it, so every picture took a display number and
+    gave it back. The X seat's server is on the other side of that
+    search. Nothing on this seat speaks X: foot and kitty are Wayland
+    only and `_run` passes an empty DISPLAY. Lillecarl/pymux#432.
+    """
+    assert "xwayland disable" in kiosk_configuration("/tmp/run.sh")
 
 
 class _Ended:

@@ -767,6 +767,29 @@ class XSeat(Seat):
             log.close()
 
 
+def kiosk_configuration(wrapper):
+    """
+    What makes sway a kiosk: no borders, one output, and the terminal
+    as the only thing on it.
+
+    **`xwayland disable`, because nothing on this seat speaks X.**
+    wlroots opens an X display as soon as the compositor starts, before
+    it has a single client for it, so every picture took a display
+    number and gave it back. The X seat's own server is on the other
+    side of that search, and the step aside is in the log of every run:
+    "Failed to bind socket @/tmp/.X11-unix/X0: Address already in use".
+    foot and kitty speak Wayland and nothing else, and `_run` passes an
+    empty DISPLAY, so no terminal here could reach an X server.
+    Lillecarl/pymux#432.
+    """
+    return (
+        "default_border none\n"
+        "xwayland disable\n"
+        "output HEADLESS-1 resolution 1024x768\n"
+        "exec /bin/sh %s\n" % (wrapper,)
+    )
+
+
 class WaylandSeat(Seat):
     """
     A compositor, one for each picture, arranged to be a kiosk.
@@ -999,11 +1022,7 @@ class WaylandSeat(Seat):
             % (shlex.join(terminal.argv(command)), room / "the-code")
         )
         config = room / "sway.conf"
-        config.write_text(
-            "default_border none\n"
-            "output HEADLESS-1 resolution 1024x768\n"
-            "exec /bin/sh %s\n" % (wrapper,)
-        )
+        config.write_text(kiosk_configuration(wrapper))
 
         log = open(log_path, "wb")
         process = subprocess.Popen(
