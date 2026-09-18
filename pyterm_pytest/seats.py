@@ -706,6 +706,11 @@ class XSeat(Seat):
             if new:
                 return sorted(new)[-1].decode()
             time.sleep(0.2)
+        # A display that stopped answering opens no window either, and
+        # `xdotool search` says so to nobody: it answers with an empty
+        # list whether the display refused it or the window is not
+        # there yet. So the display is asked here.
+        self.still_there()
         raise RuntimeError("no %s window appeared on %s" % (window_class, self.number))
 
     def _take(self, window, path):

@@ -288,6 +288,24 @@ def test_a_terminal_that_never_opened_the_display_fails_the_seat(tmp_path):
     assert "never reached display :0" in str(raised.value)
 
 
+def test_a_window_that_never_appears_asks_the_display(monkeypatch, tmp_path):
+    """
+    `xdotool search` answers with an empty list whether the display
+    refused it or the window is not there yet, so a seat that went away
+    during a picture read as a window that was slow.
+    """
+    monkeypatch.setattr(the_seats, "APPEAR_TIMEOUT", 0.0)
+    seat = XSeat()
+    seat._process = _Running()
+    seat._log = tmp_path / "xvfb.log"
+    seat.number = ":%d" % _a_display_nobody_serves()
+
+    with pytest.raises(TheSeatIsGone):
+        seat._wait_for_a_new_window(
+            "XTerm", set(), _Running(), tmp_path / "bare.log"
+        )
+
+
 def test_a_terminal_that_died_of_something_else_is_still_a_verdict(tmp_path):
     "A terminal that reached the display and then died is the run's answer."
     seat = XSeat()
