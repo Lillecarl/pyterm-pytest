@@ -12,6 +12,7 @@ Lillecarl/pymux#276 is the pass that narrows them further.
 """
 
 import os
+import re
 import shlex
 import shutil
 import socket
@@ -63,13 +64,18 @@ BLINK_START = 2.0
 COULD_NOT_RUN = int(os.environ.get("PYTERM_COULD_NOT_RUN") or 97)
 
 
-class TheSeatIsGone(RuntimeError):
+class TheSeatIsGone(Exception):
     """
     The display server this run draws on is not there any more.
 
     Every picture after it fails the same way, so a run that meets one
     stops rather than working through the rest of its fixtures to
     report the same thing each time.
+
+    **Not a `RuntimeError`.** Every driver wraps a picture in `except
+    RuntimeError` to put the logs of the room beside the reason. A seat
+    that is gone caught there comes out as a verdict on the picture,
+    which is the one thing it is not. Lillecarl/pymux#431.
     """
 
 
@@ -478,6 +484,11 @@ def _burst(path, take_one, ended, what, log_path):
     return shots
 
 
+#: What a terminal says when it never reached the display server:
+#: "xterm: Xt error: Can't open display: :0". The words around it
+#: belong to the toolkit, and "open display" is what they share.
+THE_DISPLAY_WOULD_NOT_OPEN = re.compile(rb"open display", re.IGNORECASE)
+
 #: How long a client may take to reach a display. Nothing asks until
 #: something has already gone wrong, so this is a bound and not a
 #: budget.
@@ -653,6 +664,28 @@ class XSeat(Seat):
         )
         return set(found.stdout.split())
 
+    def _the_terminal_never_got_in(self, log_path):
+        """
+        Stop the run when the terminal says it never reached the display.
+
+        A terminal that could not open the display drew nothing, so
+        there is no picture and no verdict to give. The seat is what
+        failed: the run ends with no answer, nix keeps nothing, and the
+        next build tries again.
+
+        **The terminal is asked and not the display.** The window a
+        refusal opens is short -- 0.305s at its worst, measured -- so a
+        display that turned this terminal away answers again by the time
+        anything asks it. What the terminal said does not change.
+        Lillecarl/pymux#431.
+        """
+        said = Path(log_path).read_bytes() if Path(log_path).exists() else b""
+        if THE_DISPLAY_WOULD_NOT_OPEN.search(said):
+            raise TheSeatIsGone(
+                "the terminal of the %s seat never reached display %s\n%s"
+                % (self.name, self.number, _tail(log_path))
+            )
+
     def _wait_for_a_new_window(self, window_class, already, process, log_path):
         """
         Wait for a window of this class that was not there before.
@@ -664,6 +697,7 @@ class XSeat(Seat):
         deadline = time.time() + APPEAR_TIMEOUT
         while time.time() < deadline:
             if process.poll() is not None:
+                self._the_terminal_never_got_in(log_path)
                 raise RuntimeError(
                     "the terminal ended before it drew anything (exit %s)\n%s"
                     % (process.returncode, _tail(log_path))

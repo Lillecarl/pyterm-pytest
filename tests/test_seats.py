@@ -251,6 +251,55 @@ def test_a_server_that_runs_and_serves_is_not(tmp_path):
         door.close()
 
 
+class _Ended:
+    "A terminal that is not there any more."
+
+    returncode = 1
+
+    def poll(self):
+        return 1
+
+
+def test_a_seat_that_is_gone_is_not_a_runtime_error():
+    """
+    Every driver wraps a picture in `except RuntimeError` to put the
+    logs of the room beside the reason. A seat that is gone caught
+    there comes out as a verdict on the picture, which is the one thing
+    it is not. Lillecarl/pymux#431.
+    """
+    assert not issubclass(TheSeatIsGone, RuntimeError)
+
+
+def test_a_terminal_that_never_opened_the_display_fails_the_seat(tmp_path):
+    """
+    A terminal that could not open the display drew nothing, so there
+    is no picture to judge. The window a refusal opens is short --
+    0.305s at its worst, measured -- so the display answers again by
+    the time anything asks it, and what the terminal said is what
+    stays. Lillecarl/pymux#431.
+    """
+    seat = XSeat()
+    seat.number = ":0"
+    log = tmp_path / "bare.log"
+    log.write_bytes(b"xterm: Xt error: Can't open display: :0\n")
+
+    with pytest.raises(TheSeatIsGone) as raised:
+        seat._wait_for_a_new_window("XTerm", set(), _Ended(), log)
+    assert "never reached display :0" in str(raised.value)
+
+
+def test_a_terminal_that_died_of_something_else_is_still_a_verdict(tmp_path):
+    "A terminal that reached the display and then died is the run's answer."
+    seat = XSeat()
+    seat.number = ":0"
+    log = tmp_path / "bare.log"
+    log.write_bytes(b"xterm: cannot load font 'nonesuch'\n")
+
+    with pytest.raises(RuntimeError) as raised:
+        seat._wait_for_a_new_window("XTerm", set(), _Ended(), log)
+    assert "ended before it drew anything" in str(raised.value)
+
+
 def test_one_seat_is_opened_for_the_terminals_that_share_it(monkeypatch):
     started = []
 
