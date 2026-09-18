@@ -154,6 +154,21 @@ class Seat:
     def stop(self):
         "Close it."
 
+    def keep_the_log(self, out):
+        """
+        Copy the log of the server this seat runs into the run output.
+
+        A seat that runs one server for the whole run keeps its log
+        beside the run and not in the room of any one picture, so the
+        sandbox throws it away and the run output never holds it. A run
+        whose answer is "could not draw" has to carry the reason with
+        it, because the run output is all a person gets.
+
+        A seat that starts a server for each picture already writes it
+        into that picture's room, and keeps nothing here.
+        Lillecarl/pymux#216, Lillecarl/pymux#433.
+        """
+
     def trouble(self) -> str:
         """
         Why this seat cannot be drawn on, or nothing when it can.
@@ -645,6 +660,12 @@ class XSeat(Seat):
 
         self.number = ":%s" % number.strip().decode()
         return self
+
+    def keep_the_log(self, out):
+        if self._log is None or not Path(self._log).exists():
+            return
+        Path(out).mkdir(parents=True, exist_ok=True)
+        shutil.copy(self._log, Path(out) / Path(self._log).name)
 
     def stop(self):
         if self._process is not None:

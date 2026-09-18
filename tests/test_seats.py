@@ -263,6 +263,31 @@ def test_the_wayland_seat_starts_no_x_server():
     assert "xwayland disable" in kiosk_configuration("/tmp/run.sh")
 
 
+def test_the_x_seat_keeps_its_server_log(tmp_path):
+    """
+    One server serves the whole run, so its log is beside the run and
+    not in the room of any one picture -- and the sandbox throws the
+    run's own directory away. A run whose answer is "could not draw"
+    has to carry the reason with it. Lillecarl/pymux#433.
+    """
+    seat = XSeat()
+    seat._log = tmp_path / "work" / "xvfb.log"
+    seat._log.parent.mkdir()
+    seat._log.write_text("the server said this\n")
+
+    out = tmp_path / "out"
+    seat.keep_the_log(out)
+
+    assert (out / "xvfb.log").read_text() == "the server said this\n"
+
+
+def test_a_seat_with_no_server_of_its_own_keeps_nothing(tmp_path):
+    "The wayland seat writes its compositor's log into the picture's room."
+    out = tmp_path / "out"
+    Seat().keep_the_log(out)
+    assert not out.exists()
+
+
 class _Ended:
     "A terminal that is not there any more."
 
