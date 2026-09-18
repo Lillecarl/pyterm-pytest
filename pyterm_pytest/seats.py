@@ -14,6 +14,8 @@ Lillecarl/pymux#276 is the pass that narrows them further.
 import os
 import shlex
 import shutil
+import socket
+import struct
 import subprocess
 import sys
 import time
@@ -501,7 +503,20 @@ class XSeat(Seat):
         read_fd, write_fd = os.pipe()
         self._log = work / "xvfb.log"
         self._process = subprocess.Popen(
-            ["Xvfb", "-displayfd", str(write_fd), "-screen", "0", SCREEN],
+            # **`-noreset`, or the seat goes away between two pictures.**
+            # One server serves the whole run, and each picture is a
+            # terminal that starts and is killed. So the client count
+            # reaches zero between every pair of pictures, and an X
+            # server with no clients left resets: it closes the sockets
+            # it listens on and opens them again. A terminal that starts
+            # inside that window is refused, and says "Can't open
+            # display".
+            #
+            # Measured, with an Xvfb of each kind and 24 busy processes
+            # beside it: 67 of 300 client departures refused the client
+            # that came next, the worst of them for 0.305s, and with
+            # this flag 0 of 300. Lillecarl/pymux#431.
+            ["Xvfb", "-noreset", "-displayfd", str(write_fd), "-screen", "0", SCREEN],
             pass_fds=(write_fd,),
             stdout=open(self._log, "wb"),
             stderr=subprocess.STDOUT,
