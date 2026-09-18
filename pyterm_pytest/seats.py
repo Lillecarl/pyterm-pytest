@@ -478,6 +478,94 @@ def _burst(path, take_one, ended, what, log_path):
     return shots
 
 
+#: How long a client may take to reach a display. Nothing asks until
+#: something has already gone wrong, so this is a bound and not a
+#: budget.
+DISPLAY_TIMEOUT = 5.0
+
+#: The first twelve bytes a client sends an X server: little endian,
+#: protocol 11.0, and no authorisation. The server answers 1 for a
+#: client it will serve, and 0 with a reason for one it refuses.
+_THE_SETUP_REQUEST = struct.pack("<BBHHHH2x", ord("l"), 0, 11, 0, 0, 0)
+
+
+def _read_exactly(sock, count):
+    "Exactly that many bytes, or fewer when the server stops talking."
+    got = b""
+    while len(got) < count:
+        piece = sock.recv(count - len(got))
+        if not piece:
+            break
+        got += piece
+    return got
+
+
+def _a_socket_to_the_display(number):
+    """
+    A socket to this display, or nothing and why there is nothing.
+
+    The abstract name first and the file after it, which is the order a
+    real client tries. A server on Linux binds both, and one in a
+    sandbox that could not make `/tmp/.X11-unix` has only the abstract
+    one.
+    """
+    where = "/tmp/.X11-unix/X%s" % number.lstrip(":").split(".")[0]
+    refused = "there is no display to try"
+    for address in ("\0" + where, where):
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(DISPLAY_TIMEOUT)
+        try:
+            sock.connect(address)
+            return sock, ""
+        except OSError as reason:
+            sock.close()
+            refused = "%s: %s" % (address.replace("\0", "@", 1), reason)
+    return None, refused
+
+
+def why_the_display_refuses(number):
+    """
+    Why the X server at this display will not serve a client, or
+    nothing when it will.
+
+    **A server that runs is not a display a client can reach.** The
+    trouble of the X seat was the exit code of the Xvfb process alone,
+    so a server that was alive and unreachable read as healthy: the
+    terminal's "Can't open display" became a verdict on a picture, the
+    check went red, and a red run of a check stays in the store until
+    somebody deletes it by hand. Lillecarl/pymux#431.
+
+    A refusal carries the server's own words, and "Maximum number of
+    clients reached" is one of them. Nothing else in a run holds them,
+    so this speaks the first twelve bytes of the protocol to read the
+    answer back.
+    """
+    sock, refused = _a_socket_to_the_display(number)
+    if sock is None:
+        return "nothing answers display %s (%s)" % (number, refused)
+
+    try:
+        sock.sendall(_THE_SETUP_REQUEST)
+        head = _read_exactly(sock, 8)
+        if len(head) < 8:
+            return "display %s answers a client and then drops it" % (number,)
+        if head[0] == 1:
+            return ""
+        rest = _read_exactly(sock, 4 * struct.unpack_from("<H", head, 6)[0])
+    except OSError as reason:
+        return "display %s dropped the client: %s" % (number, reason)
+    finally:
+        sock.close()
+
+    # A refusal says how long its reason is. A demand for authorisation
+    # says nothing, and the whole of what follows is the reason.
+    said = rest[: head[1]] if head[0] == 0 else rest
+    return "display %s refuses a client: %s" % (
+        number,
+        said.decode("ascii", "replace").strip() or "and gives no reason",
+    )
+
+
 class XSeat(Seat):
     "An X server of its own, with nothing else on it."
 
@@ -489,15 +577,25 @@ class XSeat(Seat):
         self._log = None
 
     def trouble(self) -> str:
-        "Whether the one server this seat runs is still there."
-        if self._process is None or self._process.poll() is None:
+        "Whether the one server this seat runs will serve a client."
+        if self._process is None:
             return ""
 
-        return "the X server of the %s seat ended with %s\n%s" % (
-            self.name,
-            self._process.returncode,
-            _tail(self._log),
-        )
+        if self._process.poll() is not None:
+            return "the X server of the %s seat ended with %s\n%s" % (
+                self.name,
+                self._process.returncode,
+                _tail(self._log),
+            )
+
+        refused = why_the_display_refuses(self.number)
+        if refused:
+            return "the X server of the %s seat is running, and %s\n%s" % (
+                self.name,
+                refused,
+                _tail(self._log),
+            )
+        return ""
 
     def start(self, work):
         read_fd, write_fd = os.pipe()

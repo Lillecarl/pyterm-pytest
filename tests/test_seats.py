@@ -3,6 +3,9 @@ The seats' own promises, apart from the waits they run.
 """
 
 import os
+import socket
+import struct
+import threading
 
 import pytest
 
@@ -14,6 +17,7 @@ from pyterm_pytest.seats import (
     TheSeatIsGone,
     XSeat,
     open_the_seats,
+    why_the_display_refuses,
     with_no_answer,
 )
 
@@ -119,6 +123,132 @@ def test_the_x_seat_asks_its_server_not_to_reset(monkeypatch, tmp_path):
     assert "-noreset" in _AnXServer.argv
     # The number the server chose, and not one this ever assumes.
     assert seat.number == ":7"
+
+
+# ----------------------------------------------------------------------
+# Whether a display will serve a client.
+#
+# The servers here are abstract sockets and nothing else. An abstract
+# name is unbound the moment its socket closes and leaves no file
+# behind, so a test that ends in the middle leaves the next run a clean
+# machine. That is why none of these needs an Xvfb.
+
+
+def _a_display_nobody_serves():
+    "A display number that no server on this machine has taken."
+    for number in range(90, 120):
+        probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            probe.bind("\0/tmp/.X11-unix/X%d" % number)
+        except OSError:
+            continue
+        finally:
+            probe.close()
+        return number
+    raise AssertionError("every display from 90 to 119 is taken")
+
+
+def a_server_that_answers(answer):
+    "A front door that reads the setup request and answers this."
+    number = _a_display_nobody_serves()
+    door = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    door.bind("\0/tmp/.X11-unix/X%d" % number)
+    door.listen(4)
+
+    def serve():
+        while True:
+            try:
+                client, _ = door.accept()
+            except OSError:
+                return
+            with client:
+                client.recv(12)
+                client.sendall(answer)
+
+    threading.Thread(target=serve, daemon=True).start()
+    return ":%d" % number, door
+
+
+#: What a server sends a client it will serve: protocol 11.0, and no
+#: data after the header.
+SERVED = struct.pack("<BxHHH", 1, 11, 0, 0)
+
+
+def refusal(reason):
+    "What a server sends a client it will not serve, and why."
+    padded = reason + b"\0" * (-len(reason) % 4)
+    return (
+        struct.pack("<BBHHH", 0, len(reason), 11, 0, len(padded) // 4) + padded
+    )
+
+
+def test_a_display_nothing_answers_says_so():
+    assert "nothing answers display" in why_the_display_refuses(
+        ":%d" % _a_display_nobody_serves()
+    )
+
+
+def test_a_display_that_serves_a_client_is_no_trouble():
+    "Or every red run would read as a seat that is gone, and none would count."
+    number, door = a_server_that_answers(SERVED)
+    try:
+        assert why_the_display_refuses(number) == ""
+    finally:
+        door.close()
+
+
+def test_a_display_that_refuses_gives_the_reason_the_server_gave():
+    """
+    The server's own words are the only thing that says why, and
+    nothing else in a run holds them. "Maximum number of clients
+    reached" is one of them. Lillecarl/pymux#431.
+    """
+    number, door = a_server_that_answers(
+        refusal(b"Maximum number of clients reached")
+    )
+    try:
+        said = why_the_display_refuses(number)
+    finally:
+        door.close()
+    assert "Maximum number of clients reached" in said
+
+
+class _Running:
+    "An Xvfb that has not ended."
+
+    returncode = None
+
+    def poll(self):
+        return None
+
+
+def test_a_server_that_runs_and_cannot_be_reached_is_a_seat_that_is_gone(tmp_path):
+    """
+    The trouble of this seat was the exit code of the process alone. A
+    display that refuses every client while its server runs read as
+    healthy, so the terminal's "Can't open display" became a verdict on
+    a picture and a red run of it stayed in the store.
+    Lillecarl/pymux#431.
+    """
+    seat = XSeat()
+    seat._process = _Running()
+    seat._log = tmp_path / "xvfb.log"
+    seat.number = ":%d" % _a_display_nobody_serves()
+
+    with pytest.raises(TheSeatIsGone) as raised:
+        seat.still_there()
+    assert "nothing answers display" in str(raised.value)
+
+
+def test_a_server_that_runs_and_serves_is_not(tmp_path):
+    seat = XSeat()
+    seat._process = _Running()
+    seat._log = tmp_path / "xvfb.log"
+    seat.number, door = a_server_that_answers(SERVED)
+    try:
+        seat.still_there()
+    finally:
+        door.close()
 
 
 def test_one_seat_is_opened_for_the_terminals_that_share_it(monkeypatch):
