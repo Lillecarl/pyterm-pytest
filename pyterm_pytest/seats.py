@@ -35,6 +35,17 @@ SCREEN = "1280x800x24"
 APPEAR_TIMEOUT = 20.0
 SETTLE_TIMEOUT = 15.0
 
+#: How long one screenshot may take before the harness cuts it off.
+#:
+#: **A bound on a window that left, not a budget for a loaded machine.**
+#: Measured on sixteen cores with forty-eight busy processes beside
+#: them: `import` of a window that is there answers in 0.85s at worst,
+#: and `import` of a window that has gone never answers at all -- twelve
+#: calls of twelve waited until they were cut off. So a screenshot that
+#: reaches this is not a slow one, it is one that nothing will ever
+#: answer. Lillecarl/pymux#462.
+PICTURE_TIMEOUT = 30.0
+
 #: A blink is about half a second on and half a second off. Eight
 #: pictures a quarter of a second apart cover two cycles and catch each
 #: phase more than once.
@@ -734,13 +745,56 @@ class XSeat(Seat):
         self.still_there()
         raise RuntimeError("no %s window appeared on %s" % (window_class, self.number))
 
-    def _take(self, window, path):
-        subprocess.run(
-            ["import", "-display", self.number, "-window", window, str(path)],
-            check=True,
-            capture_output=True,
-            timeout=30,
+    def _still_on_the_display(self, window) -> bool:
+        "Whether the display still holds this window."
+        try:
+            asked = subprocess.run(
+                ["xdotool", "getwindowgeometry", window],
+                capture_output=True,
+                timeout=DISPLAY_TIMEOUT,
+                env={**os.environ, "DISPLAY": self.number},
+            )
+        except subprocess.TimeoutExpired:
+            return False
+        return asked.returncode == 0
+
+    def _nothing_answered(self, window):
+        """
+        Why no picture of this window came, as the error to raise.
+
+        `import` does not fail on a window that has gone. It waits, and
+        the budget is the only thing that ends the wait. So the answer
+        worth giving is whether the window is still there. A
+        `TimeoutExpired` named the file it was writing instead, and it
+        is not a `RuntimeError`, so no driver put the logs of the room
+        beside it. Lillecarl/pymux#462.
+        """
+        self.still_there()
+        return RuntimeError(
+            "no picture of window %s in %gs. The window %s, the display "
+            "serves clients, and the load is %s. `import` waits for ever "
+            "on a window that has gone, so a fixture whose program ends "
+            "inside its own burst reads as a slow screenshot."
+            % (
+                window,
+                PICTURE_TIMEOUT,
+                "is still there"
+                if self._still_on_the_display(window)
+                else "has gone",
+                " ".join("%.1f" % one for one in os.getloadavg()),
+            )
         )
+
+    def _take(self, window, path):
+        try:
+            subprocess.run(
+                ["import", "-display", self.number, "-window", window, str(path)],
+                check=True,
+                capture_output=True,
+                timeout=PICTURE_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            raise self._nothing_answered(window) from None
 
     def clipboard(self) -> bytes:
         try:
@@ -874,7 +928,7 @@ class WaylandSeat(Seat):
             ["grim", str(path)],
             check=True,
             capture_output=True,
-            timeout=30,
+            timeout=PICTURE_TIMEOUT,
             env={
                 **os.environ,
                 "XDG_RUNTIME_DIR": str(room),
