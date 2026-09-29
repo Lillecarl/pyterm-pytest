@@ -6,9 +6,10 @@ suite that photographs a real terminal borrows the same two. An
 `XSeat` runs one Xvfb per run and finds windows with xdotool; a
 `WaylandSeat` runs one headless `sway` per picture, with a client
 of ours holding a virtual keyboard on the seat, and takes the output
-with `grim`. The settle loop asks pixels and not the clock; the fixed
-waits that are left are the ones a pixel question cannot answer, and
-Lillecarl/pymux#276 is the pass that narrows them further.
+with `grim`. The settle loop asks the pixels and the tree that draws
+them, never the clock; the fixed waits that are left are the ones
+neither question can answer, and Lillecarl/pymux#276 is the pass that
+narrows them further.
 """
 
 import os
@@ -45,6 +46,17 @@ SETTLE_TIMEOUT = 15.0
 #: reaches this is not a slow one, it is one that nothing will ever
 #: answer. Lillecarl/pymux#462.
 PICTURE_TIMEOUT = 30.0
+
+#: How much CPU the tree that draws a picture may use between two of
+#: them and still count as finished, in clock ticks.
+#:
+#: Measured over 48 settles, with eight picture runs at once on sixteen
+#: cores: a tree that had finished used no ticks 29 times, one tick 17
+#: times and two ticks twice, and no task of it was runnable at any of
+#: the 48. A tree that is still drawing uses about forty in the same
+#: interval, which is a whole core of it, so the bound sits far from
+#: both answers. Lillecarl/pymux#435.
+IDLE_TICKS = 5
 
 #: A blink is about half a second on and half a second off. Eight
 #: pictures a quarter of a second apart cover two cycles and catch each
@@ -140,6 +152,73 @@ def _tail(path, lines=40):
     return "--- %s ---\n%s" % (path, "\n".join(text.splitlines()[-lines:]))
 
 
+def _after_the_command(stat: str) -> list:
+    """
+    The fields of a `/proc` stat line from the state onwards.
+
+    The command sits in brackets and may hold a space or a bracket of
+    its own, so nothing before the last `") "` can be counted.
+    """
+    return stat.rsplit(") ", 1)[-1].split()
+
+
+def _the_tree_under(roots) -> list:
+    "Every process in the trees under these, the roots included."
+    children: dict = {}
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            stat = Path("/proc/%s/stat" % entry).read_text()
+        except OSError:
+            continue
+        children.setdefault(int(_after_the_command(stat)[1]), []).append(int(entry))
+
+    found: list = []
+    waiting = list(roots)
+    while waiting:
+        pid = waiting.pop()
+        if pid in found:
+            continue
+        found.append(pid)
+        waiting.extend(children.get(pid, ()))
+    return found
+
+
+def how_busy(roots):
+    """
+    How much of the tree that draws a picture is still working.
+
+    The number of its tasks that are runnable, and the CPU it has used
+    in clock ticks. A picture is taken when nothing is left to draw,
+    and two equal pictures do not say that: a process that is behind
+    and starved draws nothing between them either. A task that still
+    has work is `R`, and one that has finished is asleep on its socket,
+    which is the difference pixels cannot hold. Lillecarl/pymux#435.
+
+    **Per task and not per process.** kitty rasterizes with llvmpipe's
+    worker threads and foot has render workers of its own, so a main
+    thread asleep on the socket says nothing about either.
+    """
+    runnable = 0
+    ticks = 0
+    for pid in _the_tree_under(roots):
+        try:
+            tasks = os.listdir("/proc/%d/task" % pid)
+        except OSError:
+            continue
+        for task in tasks:
+            try:
+                stat = Path("/proc/%d/task/%s/stat" % (pid, task)).read_text()
+            except OSError:
+                continue
+            fields = _after_the_command(stat)
+            if fields[0] == "R":
+                runnable += 1
+            ticks += int(fields[11]) + int(fields[12])
+    return runnable, ticks
+
+
 class Seat:
     """
     A display server, and how to take a picture of a terminal on it.
@@ -157,6 +236,15 @@ class Seat:
     """
 
     name = ""
+
+    #: The processes whose tree draws what a picture is of. A seat puts
+    #: the terminal in it, and its own display server beside it where
+    #: that is what the picture is read out of. `how_busy` walks it.
+    _roots = ()
+
+    def how_busy(self):
+        "How much of the tree that draws this picture is still working."
+        return how_busy(self._roots)
 
     def start(self, work):
         "Open the seat. Returns itself."
@@ -300,6 +388,7 @@ class Seat:
                 not_before,
                 self.clipboard if isinstance(not_before, str) else None,
                 judge,
+                self.how_busy,
             ),
         )
 
@@ -389,6 +478,7 @@ def _settle(
     not_before=0.0,
     clipboard=None,
     judge=None,
+    how_busy=None,
 ):
     """
     Take pictures until two in a row are the same, and keep the last.
@@ -415,6 +505,13 @@ def _settle(
     still a picture. So the state is asked for and compared, and a
     wrong one is a red run with no picture kept.
     Lillecarl/pymux#353.
+
+    `how_busy` reads the tree that draws, before each picture, and the
+    reading goes into `settle-<side>.log` beside the pictures. Two
+    equal pictures are not evidence that the drawing has finished: a
+    process that is behind and starved draws nothing between them
+    either, which is how one run photographed a pane that was still
+    catching up. Lillecarl/pymux#435.
     """
     if isinstance(not_before, str):
         not_before = wait_for_the_clipboard(
@@ -439,8 +536,12 @@ def _settle(
 
     started = time.time()
     deadline = started + SETTLE_TIMEOUT + not_before
+    watching = _watch_the_tree(log_path)
+    busy = how_busy() if how_busy is not None else None
     take_one(previous)
+    watching(started, None, busy, None)
     box = None
+    quiet = True
     while time.time() < deadline:
         time.sleep(0.4)
         gone = ended()
@@ -449,9 +550,17 @@ def _settle(
                 "%s ended while it was drawing (exit %s)\n%s"
                 % (what, gone, _tail(log_path))
             )
+        before, busy = busy, how_busy() if how_busy is not None else None
         take_one(path)
         count, box = changed_region(previous, path, difference)
-        if count == 0 and time.time() - started >= not_before:
+        quiet = the_tree_is_quiet(before, busy)
+        watching(
+            started,
+            count,
+            busy,
+            None if before is None or busy is None else busy[1] - before[1],
+        )
+        if count == 0 and quiet and time.time() - started >= not_before:
             return
         shutil.copy(previous, differed)
         shutil.copy(path, previous)
@@ -469,16 +578,71 @@ def _settle(
         ):
             if one.exists():
                 shutil.copy(one, room / name)
+    # **Say which half did not hold.** A settle waits for two things:
+    # a screen that stopped changing, and a drawing tree that stopped
+    # working. One message for both leaves the next flake as hard to
+    # read as this one was. Lillecarl/pymux#435.
+    why = []
+    if box:
+        why.append("%dx%d at %d,%d kept changing" % (box[2], box[3], box[0], box[1]))
+    if not quiet:
+        why.append(
+            "the tree that draws it never went idle (%d tasks runnable)" % (busy[0],)
+        )
     raise RuntimeError(
         "%s never settled: %s\n%s"
-        % (
-            what,
-            "%dx%d at %d,%d kept changing" % (box[2], box[3], box[0], box[1])
-            if box
-            else "nothing to compare",
-            _tail(log_path),
-        )
+        % (what, ", and ".join(why) or "nothing to compare", _tail(log_path))
     )
+
+
+def _watch_the_tree(log_path):
+    """
+    A writer of one line per picture a settle takes, or one that says
+    nothing when there is nowhere to write.
+
+    The line holds the moment, how many pixels changed, how many tasks
+    of the drawing tree were runnable, and what the tree has used. A
+    settle that stopped too early leaves the reading that says so, and
+    nothing else in a run holds it. Lillecarl/pymux#435.
+    """
+    if log_path is None:
+        return lambda *_ignored: None
+
+    path = Path(log_path)
+    watching = open(path.with_name("settle-%s.log" % path.stem), "w")
+    watching.write("# seconds changed runnable ticks\n")
+
+    def wrote(started, count, busy, ticks):
+        watching.write(
+            "%7.2f %7s %8s %6s\n"
+            % (
+                time.time() - started,
+                "-" if count is None else count,
+                "-" if busy is None else busy[0],
+                "-" if ticks is None else ticks,
+            )
+        )
+        watching.flush()
+
+    return wrote
+
+
+def the_tree_is_quiet(before, after) -> bool:
+    """
+    Whether the tree that draws used the interval between two readings.
+
+    Two conditions, because they catch different halves. A tree that is
+    drawing steadily burns CPU, which the ticks catch. A tree that is
+    behind and starved burns almost none -- and every task of it that
+    still has work is `R`, waiting for a turn, which the count catches.
+    A tree that has finished is asleep on its socket and is neither.
+
+    A seat that cannot read its tree answers yes, so the settle is what
+    it was. Lillecarl/pymux#435.
+    """
+    if before is None or after is None:
+        return True
+    return after[0] == 0 and after[1] - before[1] <= IDLE_TICKS
 
 
 def _burst(path, take_one, ended, what, log_path):
@@ -832,12 +996,19 @@ class XSeat(Seat):
                 "DISPLAY": self.number,
             },
         )
+        # The Xvfb beside the terminal, because `import` copies its
+        # framebuffer: one server serves the whole run, so it is a
+        # sibling of this terminal and not a child of it.
+        self._roots = [process.pid] + (
+            [self._process.pid] if self._process is not None else []
+        )
         try:
             window = self._wait_for_a_new_window(
                 terminal.window_class, already, process, log_path
             )
             return director(lambda where: self._take(window, where), process.poll)
         finally:
+            self._roots = ()
             _end(process)
             log.close()
 
@@ -1119,6 +1290,10 @@ class WaylandSeat(Seat):
                 "DISPLAY": "",
             },
         )
+        # The compositor is the root of everything that draws here: the
+        # terminal runs under it, and `grim` reads the output it
+        # composited.
+        self._roots = [process.pid]
         holder = None
         try:
             display = self._wait_for_the_socket(room, process, log_path)
@@ -1147,6 +1322,7 @@ class WaylandSeat(Seat):
 
             return body(room, display, ended)
         finally:
+            self._roots = ()
             if holder is not None:
                 _end(holder)
             _end(process)
