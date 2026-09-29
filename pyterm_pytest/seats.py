@@ -1067,6 +1067,25 @@ class WaylandSeat(Seat):
     def __init__(self):
         self._runs = 0
         self._where = None
+        #: The compositor of the picture being taken, while one is
+        #: being taken. `trouble` is what reads it.
+        self._compositor = None
+
+    def trouble(self) -> str:
+        """
+        Why this seat cannot be drawn on, or nothing when it can.
+
+        A compositor here serves one picture, so there is no long lived
+        server to ask about -- the question is only ever about the one
+        this seat is drawing with now, and between pictures there is
+        none and nothing is wrong. Lillecarl/pymux#477.
+        """
+        if self._compositor is None or self._compositor.poll() is None:
+            return ""
+        return "the compositor of the %s seat ended with %s" % (
+            self.name,
+            self._compositor.returncode,
+        )
 
     def _room(self, work):
         self._runs += 1
@@ -1093,18 +1112,47 @@ class WaylandSeat(Seat):
             "the compositor never opened a display\n%s" % _tail(log_path)
         )
 
-    @staticmethod
-    def _take(room, display, path):
-        subprocess.run(
-            ["grim", str(path)],
-            check=True,
-            capture_output=True,
-            timeout=PICTURE_TIMEOUT,
-            env={
-                **os.environ,
-                "XDG_RUNTIME_DIR": str(room),
-                "WAYLAND_DISPLAY": display,
-            },
+    def _take(self, room, display, path):
+        try:
+            subprocess.run(
+                ["grim", str(path)],
+                check=True,
+                capture_output=True,
+                timeout=PICTURE_TIMEOUT,
+                env={
+                    **os.environ,
+                    "XDG_RUNTIME_DIR": str(room),
+                    "WAYLAND_DISPLAY": display,
+                },
+            )
+        except subprocess.TimeoutExpired:
+            raise self._nothing_answered(room, display) from None
+
+    def _nothing_answered(self, room, display):
+        """
+        Why no picture of this output came, as the error to raise.
+
+        **There is no window to ask about here**: the compositor holds
+        one and `grim` takes the whole output. So the question is
+        whether the compositor is still there to take it from, which is
+        the same shape the X seat answers about its window.
+
+        A `TimeoutExpired` named the file it was writing and nothing
+        else, and it is not a `RuntimeError`, so no driver put the logs
+        of the room beside it. Lillecarl/pymux#477.
+        """
+        self.still_there()
+        return RuntimeError(
+            "no picture of the output in %gs. The compositor %s, its "
+            "display %s, and the load is %s."
+            % (
+                PICTURE_TIMEOUT,
+                "is still running" if self.trouble() == "" else "has ended",
+                "is still in the room"
+                if (Path(room) / display).exists()
+                else "has gone from the room",
+                " ".join("%.1f" % one for one in os.getloadavg()),
+            )
         )
 
     def clipboard(self) -> bytes:
@@ -1294,6 +1342,7 @@ class WaylandSeat(Seat):
         # terminal runs under it, and `grim` reads the output it
         # composited.
         self._roots = [process.pid]
+        self._compositor = process
         holder = None
         try:
             display = self._wait_for_the_socket(room, process, log_path)
@@ -1323,6 +1372,7 @@ class WaylandSeat(Seat):
             return body(room, display, ended)
         finally:
             self._roots = ()
+            self._compositor = None
             if holder is not None:
                 _end(holder)
             _end(process)

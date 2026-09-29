@@ -17,6 +17,7 @@ from pyterm_pytest.seats import (
     SEATS,
     Seat,
     TheSeatIsGone,
+    WaylandSeat,
     XSeat,
     kiosk_configuration,
     open_the_seats,
@@ -456,6 +457,53 @@ def test_a_picture_that_never_came_asks_the_display_first(monkeypatch, tmp_path)
 
     with pytest.raises(TheSeatIsGone):
         seat._take("4194316", tmp_path / "bare.7.png")
+
+
+# ----------------------------------------------------------------------
+# The wayland seat's own screenshot.
+#
+# `grim` takes the whole output, so there is no window to ask about --
+# the question is whether the compositor is still there to take it
+# from. Lillecarl/pymux#477.
+
+
+class _AGrimThatHangs:
+    "A `subprocess.run` where grim never answers."
+
+    def __call__(self, argv, **_rest):
+        assert argv[0] == "grim", argv
+        raise subprocess.TimeoutExpired(argv, PICTURE_TIMEOUT)
+
+
+def test_a_picture_of_an_output_that_never_came_is_a_runtime_error(
+    monkeypatch, tmp_path
+):
+    seat = WaylandSeat()
+    seat._compositor = _Running()
+    monkeypatch.setattr(the_seats.subprocess, "run", _AGrimThatHangs())
+
+    with pytest.raises(RuntimeError) as raised:
+        seat._take(tmp_path, "wayland-1", tmp_path / "bare.png")
+
+    said = str(raised.value)
+    assert "is still running" in said
+    assert "has gone from the room" in said
+
+
+def test_a_compositor_that_ended_is_a_seat_that_is_gone(monkeypatch, tmp_path):
+    "Every picture after it fails the same way, so it is not a verdict."
+    seat = WaylandSeat()
+    seat._compositor = _Ended()
+    monkeypatch.setattr(the_seats.subprocess, "run", _AGrimThatHangs())
+
+    with pytest.raises(TheSeatIsGone) as raised:
+        seat._take(tmp_path, "wayland-1", tmp_path / "bare.png")
+    assert "ended with 1" in str(raised.value)
+
+
+def test_a_seat_between_pictures_has_no_compositor_to_complain_about():
+    "One compositor serves one picture, so between them there is none."
+    assert WaylandSeat().trouble() == ""
 
 
 def test_one_seat_is_opened_for_the_terminals_that_share_it(monkeypatch):
