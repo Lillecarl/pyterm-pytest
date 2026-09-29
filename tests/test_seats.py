@@ -5,6 +5,7 @@ The seats' own promises, apart from the waits they run.
 import os
 import socket
 import struct
+import subprocess
 import threading
 
 import pytest
@@ -12,6 +13,7 @@ import pytest
 from pyterm_pytest import seats as the_seats
 from pyterm_pytest.seats import (
     COULD_NOT_RUN,
+    PICTURE_TIMEOUT,
     SEATS,
     Seat,
     TheSeatIsGone,
@@ -353,6 +355,107 @@ def test_a_terminal_that_died_of_something_else_is_still_a_verdict(tmp_path):
     with pytest.raises(RuntimeError) as raised:
         seat._wait_for_a_new_window("XTerm", set(), _Ended(), log)
     assert "ended before it drew anything" in str(raised.value)
+
+
+# ----------------------------------------------------------------------
+# A screenshot that never came.
+#
+# `import` does not fail on a window that has gone. It waits, and the
+# budget is the only thing that ends the wait: measured, twelve calls
+# of twelve waited until they were cut off, while a live window under
+# three times as much load as the machine has cores answered in 0.85s
+# at worst. So the question a timed out screenshot has to answer is
+# whether the window is still there. Lillecarl/pymux#462.
+
+
+class _NothingAnswers:
+    "A `subprocess.run` where `import` hangs and xdotool answers."
+
+    def __init__(self, window_is_there):
+        self.window_is_there = window_is_there
+
+    def __call__(self, argv, **_rest):
+        if argv[0] == "import":
+            raise subprocess.TimeoutExpired(argv, PICTURE_TIMEOUT)
+        assert argv[0] == "xdotool", argv
+        return subprocess.CompletedProcess(
+            argv, 0 if self.window_is_there else 1, b"", b""
+        )
+
+
+def _a_seat_on_a_display_that_serves(tmp_path):
+    "An X seat whose server is up and answering, and that server."
+    seat = XSeat()
+    seat._process = _Running()
+    seat._log = tmp_path / "xvfb.log"
+    seat.number, door = a_server_that_answers(SERVED)
+    return seat, door
+
+
+def test_a_picture_that_never_came_says_the_window_has_gone(monkeypatch, tmp_path):
+    """
+    The bare `TimeoutExpired` named the file it was writing and nothing
+    else, so two runs a week apart looked like two slow machines rather
+    than one fixture ending inside its own burst.
+    """
+    seat, door = _a_seat_on_a_display_that_serves(tmp_path)
+    monkeypatch.setattr(the_seats.subprocess, "run", _NothingAnswers(False))
+    try:
+        with pytest.raises(RuntimeError) as raised:
+            seat._take("4194316", tmp_path / "bare.7.png")
+    finally:
+        door.close()
+
+    said = str(raised.value)
+    assert "4194316" in said
+    assert "has gone" in said
+
+
+def test_a_picture_that_never_came_says_so_when_the_window_stayed(
+    monkeypatch, tmp_path
+):
+    "A window that is still there is a different fault, and says so."
+    seat, door = _a_seat_on_a_display_that_serves(tmp_path)
+    monkeypatch.setattr(the_seats.subprocess, "run", _NothingAnswers(True))
+    try:
+        with pytest.raises(RuntimeError) as raised:
+            seat._take("4194316", tmp_path / "bare.7.png")
+    finally:
+        door.close()
+
+    assert "is still there" in str(raised.value)
+
+
+def test_a_picture_that_never_came_is_a_runtime_error(monkeypatch, tmp_path):
+    """
+    Every driver wraps a picture in `except RuntimeError` to put the
+    logs of the room beside the reason. `TimeoutExpired` is not one, so
+    the reason came out bare. Lillecarl/pymux#462.
+    """
+    seat, door = _a_seat_on_a_display_that_serves(tmp_path)
+    monkeypatch.setattr(the_seats.subprocess, "run", _NothingAnswers(False))
+    try:
+        with pytest.raises(RuntimeError) as raised:
+            seat._take("4194316", tmp_path / "bare.7.png")
+    finally:
+        door.close()
+
+    assert not isinstance(raised.value, subprocess.TimeoutExpired)
+
+
+def test_a_picture_that_never_came_asks_the_display_first(monkeypatch, tmp_path):
+    """
+    A display that went away takes every picture after it, and that is
+    not a verdict on any of them. Lillecarl/pymux#216.
+    """
+    seat = XSeat()
+    seat._process = _Running()
+    seat._log = tmp_path / "xvfb.log"
+    seat.number = ":%d" % _a_display_nobody_serves()
+    monkeypatch.setattr(the_seats.subprocess, "run", _NothingAnswers(True))
+
+    with pytest.raises(TheSeatIsGone):
+        seat._take("4194316", tmp_path / "bare.7.png")
 
 
 def test_one_seat_is_opened_for_the_terminals_that_share_it(monkeypatch):
