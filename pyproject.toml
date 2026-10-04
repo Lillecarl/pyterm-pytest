@@ -10,7 +10,7 @@ description = "Test equipment for the pyterm collection: seats, drivers, budgets
 readme = "README.md"
 license = "BSD-3-Clause"
 license-files = ["LICENSE"]
-requires-python = ">=3.10"
+requires-python = ">=3.14"
 # The floor is per module: most of this package imports the standard
 # library alone, the driver takes `ptyhost` when it lands, and nothing
 # imports a layer above that. README.md says why.
@@ -48,7 +48,7 @@ build-backend = "hatchling.build"
 packages = ["pyterm_pytest"]
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py314"
 select = [
     "E",  # pycodestyle errors
     "W",  # pycodestyle warnings
