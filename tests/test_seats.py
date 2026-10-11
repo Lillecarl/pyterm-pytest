@@ -110,11 +110,11 @@ class _AnXServer:
 
 def test_the_x_seat_asks_its_server_not_to_reset(monkeypatch, tmp_path):
     """
-    One server serves the whole run and each picture kills its
-    terminal, so the client count reaches zero between every pair of
-    pictures. An X server with no clients resets, which closes the
-    sockets it listens on and opens them again, and a terminal that
-    starts inside that window is refused: "Can't open display".
+    The seat's own tools connect and leave before the terminal is in,
+    so the client count reaches zero. An X server with no clients
+    resets, which closes the sockets it listens on and opens them
+    again, and a terminal that starts inside that window is refused:
+    "Can't open display".
 
     Measured, with an Xvfb of each kind and 24 busy processes beside
     it: 67 of 300 client departures refused the client that came next,
@@ -122,11 +122,11 @@ def test_the_x_seat_asks_its_server_not_to_reset(monkeypatch, tmp_path):
     """
     monkeypatch.setattr(the_seats.subprocess, "Popen", _AnXServer)
 
-    seat = XSeat().start(tmp_path)
+    number, _, _ = XSeat().start(tmp_path)._serve(tmp_path)
 
     assert "-noreset" in _AnXServer.argv
     # The number the server chose, and not one this ever assumes.
-    assert seat.number == ":7"
+    assert number == ":7"
 
 
 # ----------------------------------------------------------------------
@@ -268,20 +268,21 @@ def test_the_wayland_seat_starts_no_x_server():
 
 def test_the_x_seat_keeps_its_server_log(tmp_path):
     """
-    One server serves the whole run, so its log is beside the run and
-    not in the room of any one picture -- and the sandbox throws the
-    run's own directory away. A run whose answer is "could not draw"
-    has to carry the reason with it. Lillecarl/pymux#433.
+    A kept terminal's server serves many pictures, so its log is
+    beside the run and not in the room of any one picture -- and the
+    sandbox throws the run's own directory away. A run whose answer is
+    "could not draw" has to carry the reason with it.
+    Lillecarl/pymux#433.
     """
-    seat = XSeat()
-    seat._log = tmp_path / "work" / "xvfb.log"
-    seat._log.parent.mkdir()
-    seat._log.write_text("the server said this\n")
+    work = tmp_path / "work"
+    work.mkdir()
+    seat = XSeat().start(work)
+    (work / "xvfb-1.log").write_text("the server said this\n")
 
     out = tmp_path / "out"
     seat.keep_the_log(out)
 
-    assert (out / "xvfb.log").read_text() == "the server said this\n"
+    assert (out / "xvfb-1.log").read_text() == "the server said this\n"
 
 
 def test_a_seat_with_no_server_of_its_own_keeps_nothing(tmp_path):
@@ -324,7 +325,7 @@ def test_a_terminal_that_never_opened_the_display_fails_the_seat(tmp_path):
     log.write_bytes(b"xterm: Xt error: Can't open display: :0\n")
 
     with pytest.raises(TheSeatIsGone) as raised:
-        seat._wait_for_a_new_window("XTerm", set(), _Ended(), log)
+        seat._wait_for_the_window("XTerm", _Ended(), log)
     assert "never reached display :0" in str(raised.value)
 
 
@@ -341,9 +342,7 @@ def test_a_window_that_never_appears_asks_the_display(monkeypatch, tmp_path):
     seat.number = ":%d" % _a_display_nobody_serves()
 
     with pytest.raises(TheSeatIsGone):
-        seat._wait_for_a_new_window(
-            "XTerm", set(), _Running(), tmp_path / "bare.log"
-        )
+        seat._wait_for_the_window("XTerm", _Running(), tmp_path / "bare.log")
 
 
 def test_a_terminal_that_died_of_something_else_is_still_a_verdict(tmp_path):
@@ -354,7 +353,7 @@ def test_a_terminal_that_died_of_something_else_is_still_a_verdict(tmp_path):
     log.write_bytes(b"xterm: cannot load font 'nonesuch'\n")
 
     with pytest.raises(RuntimeError) as raised:
-        seat._wait_for_a_new_window("XTerm", set(), _Ended(), log)
+        seat._wait_for_the_window("XTerm", _Ended(), log)
     assert "ended before it drew anything" in str(raised.value)
 
 
@@ -403,7 +402,7 @@ def test_a_picture_that_never_came_says_the_window_has_gone(monkeypatch, tmp_pat
     monkeypatch.setattr(the_seats.subprocess, "run", _NothingAnswers(False))
     try:
         with pytest.raises(RuntimeError) as raised:
-            seat._take("4194316", tmp_path / "bare.7.png")
+            seat._take(seat.number, "4194316", tmp_path / "bare.7.png")
     finally:
         door.close()
 
@@ -420,7 +419,7 @@ def test_a_picture_that_never_came_says_so_when_the_window_stayed(
     monkeypatch.setattr(the_seats.subprocess, "run", _NothingAnswers(True))
     try:
         with pytest.raises(RuntimeError) as raised:
-            seat._take("4194316", tmp_path / "bare.7.png")
+            seat._take(seat.number, "4194316", tmp_path / "bare.7.png")
     finally:
         door.close()
 
@@ -437,7 +436,7 @@ def test_a_picture_that_never_came_is_a_runtime_error(monkeypatch, tmp_path):
     monkeypatch.setattr(the_seats.subprocess, "run", _NothingAnswers(False))
     try:
         with pytest.raises(RuntimeError) as raised:
-            seat._take("4194316", tmp_path / "bare.7.png")
+            seat._take(seat.number, "4194316", tmp_path / "bare.7.png")
     finally:
         door.close()
 
@@ -456,7 +455,7 @@ def test_a_picture_that_never_came_asks_the_display_first(monkeypatch, tmp_path)
     monkeypatch.setattr(the_seats.subprocess, "run", _NothingAnswers(True))
 
     with pytest.raises(TheSeatIsGone):
-        seat._take("4194316", tmp_path / "bare.7.png")
+        seat._take(seat.number, "4194316", tmp_path / "bare.7.png")
 
 
 # ----------------------------------------------------------------------

@@ -249,7 +249,9 @@ class Shown:
     roots: list
     #: The terminal's exit code once it has ended, and `None` before.
     gone: object
-    #: The output a Wayland seat takes, and the compositor that holds it.
+    #: The display server of this terminal alone: where it keeps its
+    #: files -- a Wayland seat's room, an X seat's log -- its display,
+    #: and its process.
     room: Path | None = None
     display: str | None = None
     compositor: object = None
@@ -266,16 +268,10 @@ class Seat:
     """
     A display server, and how to take a picture of a terminal on it.
 
-    The two seats differ in more than the protocol.
-
-    The X seat runs one server for the whole run, and every terminal
-    opens a window on it. So a picture is of one window among several,
-    and the seat has to find the right one.
-
-    The Wayland seat runs a compositor for each terminal, and that
-    compositor gives its one window the whole output. So a picture is
-    of the output, and there is nothing to find. That is the shape the
-    harness wants, and it is what a kiosk compositor is for.
+    Both seats run a display server for each terminal, so a terminal's
+    clipboard and its pixels are its own. The X seat photographs the
+    terminal's window. The Wayland seat's kiosk compositor gives its one
+    window the whole output, so a picture is of the output.
 
     **A terminal starts once per run, not once per picture.** It runs
     the ptyproxy viewer, each command runs as the application of that
@@ -490,17 +486,14 @@ class Seat:
 
     def keep_the_log(self, out):
         """
-        Copy the log of the server this seat runs into the run output.
+        Copy the logs of the servers this seat ran into the run output.
 
-        A seat that runs one server for the whole run keeps its log
-        beside the run and not in the room of any one picture, so the
-        sandbox throws it away and the run output never holds it. A run
-        whose answer is "could not draw" has to carry the reason with
-        it, because the run output is all a person gets.
-
-        A seat that starts a server for each picture already writes it
-        into that picture's room, and keeps nothing here.
-        Lillecarl/pymux#216, Lillecarl/pymux#433.
+        A server that outlives one picture keeps its log beside the run
+        and not in the room of any one picture, so the sandbox throws it
+        away and the run output never holds it. A run whose answer is
+        "could not draw" has to carry the reason with it, because the
+        run output is all a person gets. Lillecarl/pymux#216,
+        Lillecarl/pymux#433.
         """
 
     def trouble(self) -> str:
@@ -561,9 +554,9 @@ class Seat:
         answers, and the bare one could not be told from the other.
 
         Once the application ends, each side gets a fence of its own
-        and a picture once it settles. A fence goes to one viewer only:
-        on the X seat both windows share one clipboard, so a token they
-        both received would not say which one took it.
+        and a picture once it settles. A fence goes to one viewer only,
+        so a seat whose terminals share a clipboard still reads which
+        one took it.
         """
         portal = self._the_portal()
         served = Path(work) / ("twins-%s.sock" % os.urandom(4).hex())
@@ -608,14 +601,18 @@ class Seat:
                         room.mkdir(exist_ok=True)
                         self._using(shown, *drawing)
                         try:
-                            wait_for_the_clipboard(
-                                self.clipboard,
-                                token,
-                                ended,
-                                side_what,
-                                log_path,
-                                again=lambda: portal.call(proxy.inject, fenced, [one]),
-                            )
+                            try:
+                                wait_for_the_clipboard(
+                                    self.clipboard,
+                                    token,
+                                    ended,
+                                    side_what,
+                                    log_path,
+                                    again=lambda: portal.call(proxy.inject, fenced, [one]),
+                                )
+                            except RuntimeError:
+                                shown.take(path.with_name("%s-unfenced.png" % path.stem))
+                                raise
                             _settle(room, path, shown.take, ended, side_what, log_path, how_busy=self.how_busy)
                         finally:
                             self._using(None)
@@ -838,8 +835,8 @@ def wait_for_the_clipboard(
             )
         if time.time() >= deadline:
             raise RuntimeError(
-                "%s: waited %gs for the fence, and the terminal never took it\n%s"
-                % (what, timeout, _tail(log_path))
+                "%s: waited %gs for the fence %s, and the terminal never took it; the clipboard holds %r\n%s"
+                % (what, timeout, token, read_the_clipboard()[:200], _tail(log_path))
             )
         time.sleep(0.1)
 
@@ -1156,18 +1153,38 @@ def why_the_display_refuses(number):
 
 
 class XSeat(Seat):
-    "An X server of its own, with nothing else on it."
+    """
+    An X server for each kept terminal, with nothing else on it.
+
+    **One server per terminal, as the Wayland seat runs one compositor
+    per terminal.** Two terminals on one server share its clipboard, so
+    a fence read there cannot say which one took it. And X gives a
+    selection only to a claim stamped no earlier than the last owner's:
+    a terminal that has had no event since the other one took the
+    clipboard is refused. Measured, the pymux twin of xterm never took
+    its fence on the second fixture. Their windows would also cover one
+    another, both at +0+0, and `import` copies what is on top.
+    """
 
     name = "x"
 
     def __init__(self):
         super().__init__()
+        #: The server of the terminal being drawn on, while one is.
         self.number = None
         self._process = None
         self._log = None
+        self._work = None
+        self._servers = 0
+
+    def _using(self, shown, *drawing):
+        super()._using(shown, *drawing)
+        self.number = None if shown is None else shown.display
+        self._process = None if shown is None else shown.compositor
+        self._log = None if shown is None else shown.room
 
     def trouble(self) -> str:
-        "Whether the one server this seat runs will serve a client."
+        "Whether the server of the terminal being drawn on will serve a client."
         if self._process is None:
             return ""
 
@@ -1188,27 +1205,35 @@ class XSeat(Seat):
         return ""
 
     def start(self, work):
+        self._work = Path(work)
+        return self
+
+    def _serve(self, work):
+        "Start an X server, and give back its display, its process and its log."
+        self._servers += 1
+        log = Path(work) / ("xvfb-%d.log" % self._servers)
         read_fd, write_fd = os.pipe()
-        self._log = work / "xvfb.log"
-        self._process = subprocess.Popen(
-            # **`-noreset`, or the seat goes away between two pictures.**
-            # One server serves the whole run, and a terminal the seat
-            # lets go is killed. So the client count can reach zero
-            # before the next terminal starts, and an X
-            # server with no clients left resets: it closes the sockets
-            # it listens on and opens them again. A terminal that starts
-            # inside that window is refused, and says "Can't open
-            # display".
-            #
-            # Measured, with an Xvfb of each kind and 24 busy processes
-            # beside it: 67 of 300 client departures refused the client
-            # that came next, the worst of them for 0.305s, and with
-            # this flag 0 of 300. Lillecarl/pymux#431.
-            ["Xvfb", "-noreset", "-displayfd", str(write_fd), "-screen", "0", SCREEN],
-            pass_fds=(write_fd,),
-            stdout=open(self._log, "wb"),
-            stderr=subprocess.STDOUT,
-        )
+        with open(log, "wb") as output:
+            process = subprocess.Popen(
+                # **`-noreset`, or the display goes away under the
+                # terminal.** The seat's own tools -- xdotool, xclip,
+                # import -- each connect and leave, so the client count
+                # can reach zero before the terminal is in, and an X
+                # server with no clients left resets: it closes the
+                # sockets it listens on and opens them again. A client
+                # that comes inside that window is refused, and a
+                # terminal says "Can't open display".
+                #
+                # Measured, with an Xvfb of each kind and 24 busy
+                # processes beside it: 67 of 300 client departures
+                # refused the client that came next, the worst of them
+                # for 0.305s, and with this flag 0 of 300.
+                # Lillecarl/pymux#431.
+                ["Xvfb", "-noreset", "-displayfd", str(write_fd), "-screen", "0", SCREEN],
+                pass_fds=(write_fd,),
+                stdout=output,
+                stderr=subprocess.STDOUT,
+            )
         os.close(write_fd)
 
         with os.fdopen(read_fd, "rb") as reader:
@@ -1220,25 +1245,17 @@ class XSeat(Seat):
                     break
                 number += piece
         if not number.strip():
-            raise RuntimeError("Xvfb never said which display it took")
-
-        self.number = ":%s" % number.strip().decode()
-        return self
+            _end(process)
+            raise TheSeatIsGone("Xvfb never said which display it took\n%s" % _tail(log))
+        return ":%s" % number.strip().decode(), process, log
 
     def keep_the_log(self, out):
-        if self._log is None or not Path(self._log).exists():
-            return
-        Path(out).mkdir(parents=True, exist_ok=True)
-        shutil.copy(self._log, Path(out) / Path(self._log).name)
-
-    def stop(self):
-        super().stop()
-        if self._process is not None:
-            self._process.terminate()
-            try:
-                self._process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self._process.kill()
+        "Each server's log: the sandbox throws the work directory away."
+        logs = sorted(self._work.glob("xvfb-*.log")) if self._work is not None else []
+        if logs:
+            Path(out).mkdir(parents=True, exist_ok=True)
+        for log in logs:
+            shutil.copy(log, Path(out) / log.name)
 
     def _windows(self, window_class):
         "Every window of this class that is on the display now."
@@ -1272,14 +1289,8 @@ class XSeat(Seat):
                 % (self.name, self.number, _tail(log_path))
             )
 
-    def _wait_for_a_new_window(self, window_class, already, process, log_path):
-        """
-        Wait for a window of this class that was not there before.
-
-        The identifier of a window that has gone is still an
-        identifier, and taking a picture of one waits for a window that
-        never draws again. So a run never reuses the one before it.
-        """
+    def _wait_for_the_window(self, window_class, process, log_path):
+        "Wait for the terminal's window, the only one on its server."
         deadline = time.time() + APPEAR_TIMEOUT
         while time.time() < deadline:
             if process.poll() is not None:
@@ -1288,9 +1299,9 @@ class XSeat(Seat):
                     "the terminal ended before it drew anything (exit %s)\n%s"
                     % (process.returncode, _tail(log_path))
                 )
-            new = self._windows(window_class) - already
-            if new:
-                return sorted(new)[-1].decode()
+            found = self._windows(window_class)
+            if found:
+                return sorted(found)[-1].decode()
             time.sleep(0.2)
         # A display that stopped answering opens no window either, and
         # `xdotool search` says so to nobody: it answers with an empty
@@ -1339,10 +1350,10 @@ class XSeat(Seat):
             )
         )
 
-    def _take(self, window, path):
+    def _take(self, number, window, path):
         try:
             subprocess.run(
-                ["import", "-display", self.number, "-window", window, str(path)],
+                ["import", "-display", number, "-window", window, str(path)],
                 check=True,
                 capture_output=True,
                 timeout=PICTURE_TIMEOUT,
@@ -1373,8 +1384,8 @@ class XSeat(Seat):
     subject = "the window"
 
     def _open(self, terminal, command, work, log, stack):
-        already = self._windows(terminal.window_class)
-
+        number, server, server_log = self._serve(work)
+        stack.callback(_end, server)
         output = stack.enter_context(open(log, "wb"))
         process = subprocess.Popen(
             terminal.argv(command),
@@ -1383,19 +1394,25 @@ class XSeat(Seat):
             env={
                 **os.environ,
                 **terminal.environment,
-                "DISPLAY": self.number,
+                "DISPLAY": number,
             },
         )
         stack.callback(_end, process)
-        window = self._wait_for_a_new_window(terminal.window_class, already, process, log)
+        self.number, self._process, self._log = number, server, server_log
+        try:
+            window = self._wait_for_the_window(terminal.window_class, process, log)
+        finally:
+            self.number = self._process = self._log = None
         return Shown(
             log=log,
-            take=lambda where: self._take(window, where),
+            take=lambda where: self._take(number, window, where),
             # The Xvfb beside the terminal, because `import` copies its
-            # framebuffer: one server serves the whole run, so it is a
-            # sibling of this terminal and not a child of it.
-            roots=[process.pid] + ([self._process.pid] if self._process is not None else []),
+            # framebuffer. The terminal is its client, not its child.
+            roots=[process.pid, server.pid],
             gone=process.poll,
+            room=server_log,
+            display=number,
+            compositor=server,
         )
 
 
