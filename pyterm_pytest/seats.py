@@ -621,7 +621,7 @@ class Seat:
                     raise RuntimeError("%s: %s\n%s" % (what, reason, _tail(log_path))) from None
             viewers = [proxies[served].viewers[0 if apart else number] for number, served in enumerate(sockets)]
 
-            def started(served, count, viewer, answered):
+            def started(served, count, viewer, answered, size=None):
                 return portal.wrap_async_context_manager(
                     proxies[served].application(
                         ["sh", "-c", command],
@@ -629,15 +629,30 @@ class Seat:
                         environment={**(viewer.environment or {}), **(environment or {})},
                         directory=directory,
                         answer=answered,
+                        size=size,
                         wait=APPEAR_TIMEOUT,
                     )
                 )
+
+            size = None
+            if apart:
+                # One size for both, as one shared proxy would ask: a pane
+                # reports pymux's first guess before the size of its
+                # client, and a copy started on it draws for a screen
+                # its terminal does not have.
+                deadline = time.time() + APPEAR_TIMEOUT
+                while len({viewer.size for viewer in viewers}) != 1 or viewers[0].size is None:
+                    if time.time() >= deadline:
+                        sizes = ", ".join("%s %s" % (role, viewer.size) for role, viewer in zip(roles, viewers))
+                        raise RuntimeError("%s: the terminals never agreed on a size: %s" % (what, sizes))
+                    time.sleep(0.05)
+                size = viewers[0].size
 
             try:
                 with contextlib.ExitStack() as running:
                     if apart:
                         applications = [
-                            running.enter_context(started(served, 1, viewer, None))
+                            running.enter_context(started(served, 1, viewer, None, size))
                             for served, viewer in zip(sockets, viewers)
                         ]
                     else:
@@ -887,6 +902,8 @@ class Twins:
             if id(side.application) not in recorded:
                 recorded.add(id(side.application))
                 (room / ("%s-output.bin" % side.role)).write_bytes(bytes(side.application.output))
+                screen = side.application.parsed.screen
+                (room / ("%s-size.txt" % side.role)).write_text("%d %d\n" % (screen.lines, screen.columns))
             (room / ("%s-replies.txt" % side.role)).write_text(
                 "".join("%d %r\n" % (offset, payload) for offset, payload in side.viewer.replies)
             )

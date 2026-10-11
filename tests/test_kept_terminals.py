@@ -40,9 +40,11 @@ class FakeSeat(Seat):
     name = "fake"
     reads_fence = True
 
-    def __init__(self, ignores_ris=False):
+    def __init__(self, ignores_ris=False, columns=(10, 10)):
         super().__init__()
         self.ignores_ris = ignores_ris
+        #: How wide each terminal it opens is, in the order it opens them.
+        self.columns = columns
         self.opened = 0
         self.received = b""
 
@@ -55,7 +57,7 @@ class FakeSeat(Seat):
         # Each terminal answers with its own number, so a test can say whose answer it got.
         attributes = b"\x1b[?%dc" % self.opened
         master, slave = os.openpty()
-        set_terminal_size(master, 4, 10)
+        set_terminal_size(master, 4, self.columns[(self.opened - 1) % len(self.columns)])
         viewer = subprocess.Popen(
             terminal.argv(command),
             stdin=slave,
@@ -227,6 +229,27 @@ def test_twins_apart_each_hear_their_own_terminal(seat, tmp_path):
     twins_of(seat(), asked(tmp_path), tmp_path, apart=True)
     assert (tmp_path / "answered-").read_bytes() == b"\x1b[?1c"
     assert (tmp_path / "answered-1").read_bytes() == b"\x1b[?2c"
+
+
+@pytest.mark.parametrize("apart", [False, True])
+def test_a_directors_error_comes_out_as_itself(seat, tmp_path, apart):
+    "Every picture driver catches RuntimeError to put its logs beside the reason; a group would pass it by."
+
+    def director(twins):
+        raise RuntimeError("the director's own")
+
+    with pytest.raises(RuntimeError, match="the director's own"):
+        seat().twins(
+            Terminal(), lambda viewer: "exec " + viewer, "sleep 30", tmp_path, (tmp_path / "b", tmp_path / "t"), director,
+            apart=apart,
+        )
+
+
+def test_twins_apart_wait_for_one_size(seat, tmp_path, monkeypatch):
+    "A pane reports a first guess at its size; a copy started on it draws for the wrong screen."
+    monkeypatch.setattr(the_seats, "APPEAR_TIMEOUT", 1.0)
+    with pytest.raises(RuntimeError, match="never agreed on a size"):
+        twins_of(seat(columns=(10, 12)), "printf apart", tmp_path, apart=True)
 
 
 def test_twins_apart_run_the_application_once_each(seat, tmp_path):
