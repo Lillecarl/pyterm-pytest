@@ -350,16 +350,18 @@ class Seat:
 
         `not_before` holds the settle off, for a run whose keys have
         not been pressed yet: a number of seconds, the file a relay
-        touches, or the token a fixture's fence put in the clipboard.
+        touches, or the token a fixture's fence put in the clipboard,
+        or a tuple of tokens the program fences in that order.
         `_settle` says why.
 
         `judge` reads the state of the program once that wait is over
         and raises when it is not the state the keys asked for.
         `_settle` says why a picture needs one.
         """
-        if isinstance(not_before, str) and not self.reads_fence:
+        fenced = isinstance(not_before, (str, tuple))
+        if fenced and not self.reads_fence:
             raise RuntimeError("the %s seat has no reader for the fence" % self.name)
-        if judge is not None and not isinstance(not_before, (str, Path)):
+        if judge is not None and not isinstance(not_before, (str, tuple, Path)):
             # A judge reads the state after the wait, so a wait with no
             # evidence in it would have it read the state from before
             # the keys and pass.
@@ -387,7 +389,7 @@ class Seat:
                 what,
                 log_path,
                 not_before,
-                self.clipboard if isinstance(not_before, str) else None,
+                self.clipboard if fenced else None,
                 judge,
                 self.how_busy,
             ),
@@ -454,6 +456,14 @@ def fence(work, token):
 
     Then it says it stopped, and the settle waits for that: a fence
     written after the seat saw the token would land inside the settle.
+
+    **A fence before the drawing is a fence on the size.** A kiosk
+    compositor sends a window its size before it gives it the focus,
+    and a terminal takes the size at once. So a terminal that has taken
+    a fence has its final size, and a program that fences first draws
+    at that size rather than at the one the terminal started with.
+    foot drew a recording at a narrower size once without it
+    (Lillecarl/pymux#584).
     """
     taken, stopped = _fence_files(work, token)
     payload = base64.b64encode(token.encode()).decode()
@@ -534,10 +544,11 @@ def _settle(
     `not_before` holds the settle off, for a run whose keys have not
     been pressed yet: a number of seconds, the file a relay touches
     when they are done, or the token a fixture's fence put in the
-    clipboard of the display server. A screen that is waiting for a
-    key is perfectly still, so two pictures of it are the same and
-    this would keep the screen from before the keys and call it
-    settled. Nothing that only writes bytes needs it.
+    clipboard of the display server, or several tokens fenced in order
+    (`fence` says why a program fences before it draws). A screen that
+    is waiting for a key is perfectly still, so two pictures of it are
+    the same and this would keep the screen from before the keys and
+    call it settled. Nothing that only writes bytes needs it.
     Lillecarl/pymux#161, Lillecarl/pymux#275, Lillecarl/pymux#281.
 
     `judge` reads the state of the program once that wait is over.
@@ -558,9 +569,11 @@ def _settle(
     catching up. Lillecarl/pymux#435.
     """
     if isinstance(not_before, str):
-        not_before = wait_for_the_clipboard(
-            clipboard, not_before, ended, what, log_path, work=work
-        )
+        not_before = (not_before,)
+    if isinstance(not_before, tuple):
+        for token in not_before:
+            wait_for_the_clipboard(clipboard, token, ended, what, log_path, work=work)
+        not_before = 0.0
     elif isinstance(not_before, Path):
         not_before = wait_for_the_file(not_before, ended, what, log_path)
 
