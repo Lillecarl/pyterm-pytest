@@ -12,6 +12,7 @@ neither question can answer, and Lillecarl/pymux#276 is the pass that
 narrows them further.
 """
 
+import base64
 import os
 import re
 import shlex
@@ -440,8 +441,40 @@ def wait_for_the_file(path, ended, what, log_path, timeout=APPEAR_TIMEOUT):
     return 0.0
 
 
+def fence(work, token):
+    """
+    The shell lines that end a program's drawing with the fence for
+    `token`, for a seat that settles in `work`.
+
+    **The program writes the fence until the seat says it was taken.**
+    A terminal refuses the clipboard escape while its window is
+    unfocused, and the focus comes when the compositor sends it, which
+    is after the program started. A fixed wait before one fence was a
+    guess, and a loaded machine beat it (Lillecarl/pymux#583).
+
+    Then it says it stopped, and the settle waits for that: a fence
+    written after the seat saw the token would land inside the settle.
+    """
+    taken, stopped = _fence_files(work, token)
+    payload = base64.b64encode(token.encode()).decode()
+    return (
+        "until [ -e %s ]; do printf '\\033]52;c;%s\\007'; sleep 0.05; done\n"
+        "touch %s\n" % (shlex.quote(str(taken)), payload, shlex.quote(str(stopped)))
+    )
+
+
+def _fence_files(work, token):
+    return Path(work) / ("%s.taken" % token), Path(work) / ("%s.stopped" % token)
+
+
 def wait_for_the_clipboard(
-    read_the_clipboard, token, ended, what, log_path, timeout=APPEAR_TIMEOUT
+    read_the_clipboard,
+    token,
+    ended,
+    what,
+    log_path,
+    timeout=APPEAR_TIMEOUT,
+    work=None,
 ):
     """
     Wait for the display server's clipboard to hold the token.
@@ -450,6 +483,9 @@ def wait_for_the_clipboard(
     on the bytes, and the terminal is the thing the picture is of: a
     fence the terminal never took is a run that photographs nothing,
     and this says so. Lillecarl/pymux#281.
+
+    With `work`, the program wrote its fence with `fence`, and this
+    answers it: the token was taken, so stop writing it.
     """
     deadline = time.time() + timeout
     while token.encode() not in read_the_clipboard():
@@ -465,6 +501,14 @@ def wait_for_the_clipboard(
                 % (timeout, _tail(log_path))
             )
         time.sleep(0.1)
+
+    if work is not None:
+        taken, stopped = _fence_files(work, token)
+        taken.touch()
+        wait_for_the_file(stopped, ended, what, log_path, timeout)
+        # A token may fence two runs, and the second must write its own.
+        taken.unlink()
+        stopped.unlink()
     return 0.0
 
 
@@ -515,7 +559,7 @@ def _settle(
     """
     if isinstance(not_before, str):
         not_before = wait_for_the_clipboard(
-            clipboard, not_before, ended, what, log_path
+            clipboard, not_before, ended, what, log_path, work=work
         )
     elif isinstance(not_before, Path):
         not_before = wait_for_the_file(not_before, ended, what, log_path)
