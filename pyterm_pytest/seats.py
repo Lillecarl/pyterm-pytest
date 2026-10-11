@@ -655,7 +655,9 @@ def wait_for_the_file(path, ended, what, log_path, timeout=APPEAR_TIMEOUT):
                 "waited %gs for %s, and it never came\n%s"
                 % (timeout, path, _tail(log_path))
             )
-        time.sleep(0.2)
+        # A fence waits here twice per run, so the poll is most of what
+        # a fence costs.
+        time.sleep(0.05)
     return 0.0
 
 
