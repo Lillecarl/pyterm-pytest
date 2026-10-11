@@ -29,7 +29,7 @@ from pathlib import Path
 import anyio.from_thread
 from PIL import Image, ImageChops
 
-from .ptyproxy import RESET, Proxy
+from .ptyproxy import RESET, Proxy, answers_from
 
 
 #: The screen of the X server. It only has to be larger than the
@@ -321,24 +321,35 @@ class Seat:
         "Start `terminal` running `command`, and give back what shows it."
         raise NotImplementedError
 
-    def _using(self, shown, application=None):
-        "Point what reads the seat -- `how_busy`, the clipboard -- at `shown`."
+    def _using(self, shown, *drawing):
+        """
+        Point what reads the seat -- `how_busy`, the clipboard -- at
+        `shown`, and the processes in `drawing` beside its own.
+        """
         self._current = shown
-        self._roots = () if shown is None else shown.roots + ([application] if application else [])
+        self._roots = () if shown is None else shown.roots + list(drawing)
 
-    def _keep(self, terminal, work):
-        "The kept terminal of this kind, started when there is none."
-        key = (tuple(terminal.argv(shlex.join(VIEWER))), tuple(sorted(terminal.environment.items())))
+    def _the_portal(self):
+        "The event loop the proxies run in, started on first use."
+        if self._portal is None:
+            self._portal = self._kept.enter_context(anyio.from_thread.start_blocking_portal())
+        return self._portal
+
+    def _keep(self, terminal, work, role=""):
+        """
+        The kept terminal of this kind, started when there is none.
+        `role` keeps two of one kind apart, for twins.
+        """
+        key = (role, tuple(terminal.argv(shlex.join(VIEWER))), tuple(sorted(terminal.environment.items())))
         shown = self._shown.get(key)
         if shown is not None:
             if shown.gone() is None:
                 return shown
             self._let_go(shown, "it ended with %s" % (shown.gone(),))
 
-        if self._portal is None:
-            self._portal = self._kept.enter_context(anyio.from_thread.start_blocking_portal())
+        self._the_portal()
         self._opened += 1
-        name = "%s-%d" % (terminal.name, self._opened)
+        name = "-".join(filter(None, (terminal.name, role, str(self._opened))))
         stack = contextlib.ExitStack()
         try:
             proxy = stack.enter_context(
@@ -430,16 +441,27 @@ class Seat:
             time.sleep(0.05)
 
     def _in_a_terminal(self, terminal, command, work, log_path, body):
+        "Run `command` in the kept terminal of this kind, and hand `body` the terminal and `ended`."
+        with self._run(terminal, command, work, log_path) as (shown, running, ended):
+            self._using(shown, running.backend.pid)
+            try:
+                return body(shown, ended)
+            finally:
+                self._using(None)
+
+    @contextlib.contextmanager
+    def _run(self, terminal, command, work, log_path, role=""):
         """
-        Run `command` in the kept terminal of this kind, and hand `body`
-        the terminal and `ended`.
+        Run `command` in the kept terminal of this kind for as long as
+        the block runs, and give back the terminal, the running
+        application, and `ended`. The terminal is reset after.
 
         The command runs with the environment the terminal gave its
         viewer, so it sees the TERM and COLORTERM it would have seen as
         the terminal's own program. Its run's log is the slice of the
         terminal's log written while it ran.
         """
-        shown = self._keep(terminal, work)
+        shown = self._keep(terminal, work, role)
         start = shown.log.stat().st_size if shown.log.exists() else 0
         if log_path is not None:
             Path(log_path).write_text("# %s, kept, from byte %d of %s\n" % (shown.name, start, shown.log))
@@ -448,7 +470,6 @@ class Seat:
         )
         try:
             with application as running:
-                self._using(shown, running.backend.pid)
 
                 def ended():
                     gone = shown.gone()
@@ -456,9 +477,8 @@ class Seat:
                         return gone
                     return running.backend.returncode if running.ended.is_set() else None
 
-                return body(shown, ended)
+                yield shown, running, ended
         finally:
-            self._using(None)
             if log_path is not None and shown.log.exists():
                 with open(shown.log, "rb") as log, open(log_path, "ab") as into:
                     log.seek(start)
@@ -522,6 +542,88 @@ class Seat:
         return self._in_a_terminal(
             terminal, command, work, log_path, lambda shown, ended: director(shown.take, ended)
         )
+
+    def twins(self, terminal, through, command, work, paths, log_paths, answer=None):
+        """
+        Run `command` once, shown at the same time by two kept terminals
+        of one kind, and leave a picture of each at the two `paths`.
+
+        The first terminal shows it bare. The second shows it through
+        the program under test: `through` takes the shell command that
+        runs a viewer, and gives back the command that runs that viewer
+        inside the program. Both viewers attach to one proxy of their
+        own, so both terminals get the same bytes, and the application
+        starts once they agree on one size. Lillecarl/pymux#592.
+
+        **Neither terminal answers a query.** The proxy answers from
+        `answer`, an empty table unless given, and drops what either
+        terminal sends. Two terminals would give the application two
+        answers, and the bare one could not be told from the other.
+
+        Once the application ends, each side gets a fence of its own
+        and a picture once it settles. A fence goes to one viewer only:
+        on the X seat both windows share one clipboard, so a token they
+        both received would not say which one took it.
+        """
+        portal = self._the_portal()
+        served = Path(work) / ("twins-%s.sock" % os.urandom(4).hex())
+        viewer = shlex.join([*VIEWER, str(served)])
+        sides = (("bare", "exec " + viewer), ("through", through(viewer)))
+        what = "%s of %s" % (self.subject, terminal.name)
+        with portal.wrap_async_context_manager(Proxy.serving(served)) as proxy, contextlib.ExitStack() as stack:
+            ran = []
+            for (role, side), log_path in zip(sides, log_paths):
+                ran.append(stack.enter_context(self._run(terminal, side, work, log_path, role)))
+                try:
+                    portal.call(
+                        proxy.until,
+                        lambda: len(proxy.viewers) == len(ran),
+                        "the %s viewer never reached the twins' proxy" % role,
+                        APPEAR_TIMEOUT,
+                    )
+                except TimeoutError as reason:
+                    raise RuntimeError("%s: %s\n%s" % (what, reason, _tail(log_path))) from None
+            viewers = list(proxy.viewers)
+            application = portal.wrap_async_context_manager(
+                proxy.application(
+                    ["sh", "-c", command],
+                    viewers=len(sides),
+                    environment=viewers[0].environment,
+                    answer=answers_from({}) if answer is None else answer,
+                    wait=APPEAR_TIMEOUT,
+                )
+            )
+            try:
+                with application as running:
+                    try:
+                        portal.call(_until_it_ends, running, PICTURE_TIMEOUT)
+                    except TimeoutError:
+                        raise RuntimeError("%s: the application ran past %gs" % (what, PICTURE_TIMEOUT)) from None
+                    drawing = [pid for shown, side, _ in ran for pid in [*shown.roots, side.backend.pid]]
+                    for (role, _), (shown, _, ended), one, path, log_path in zip(sides, ran, viewers, paths, log_paths):
+                        side_what = "%s, %s" % (what, role)
+                        token = os.urandom(8).hex()
+                        fenced = b"\x1b]52;c;%s\x07" % base64.b64encode(token.encode())
+                        room = Path(work) / role
+                        room.mkdir(exist_ok=True)
+                        self._using(shown, *drawing)
+                        try:
+                            wait_for_the_clipboard(
+                                self.clipboard,
+                                token,
+                                ended,
+                                side_what,
+                                log_path,
+                                again=lambda: portal.call(proxy.inject, fenced, [one]),
+                            )
+                            _settle(room, path, shown.take, ended, side_what, log_path, how_busy=self.how_busy)
+                        finally:
+                            self._using(None)
+            finally:
+                portal.call(proxy.let_go)
+                for _, side, _ in ran:
+                    with contextlib.suppress(TimeoutError):
+                        portal.call(_until_it_ends, side, APPEAR_TIMEOUT)
 
     #: Whether this seat can read a fence. A fence is an OSC 52 in
     #: the clipboard of the outermost terminal, and the seat reads it
@@ -628,6 +730,11 @@ class Seat:
     #: a picture of one window among several; the Wayland seat takes the
     #: whole output, because the compositor holds one window.
     subject = "the picture"
+
+
+async def _until_it_ends(application, seconds):
+    with anyio.fail_after(seconds):
+        await application.ended.wait()
 
 
 def wait_for_the_file(path, ended, what, log_path, timeout=APPEAR_TIMEOUT):
@@ -1351,8 +1458,8 @@ class WaylandSeat(Seat):
         #: `trouble` is what reads it.
         self._compositor = None
 
-    def _using(self, shown, application=None):
-        super()._using(shown, application)
+    def _using(self, shown, *drawing):
+        super()._using(shown, *drawing)
         self._where = None if shown is None else (shown.room, shown.display)
         self._compositor = None if shown is None else shown.compositor
 

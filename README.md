@@ -12,6 +12,10 @@ of them need the same thing:
   the `ptyproxy` viewer in it, and runs each command through the
   proxy. Between commands it resets the terminal and checks the
   picture against the terminal's first blank one. Lillecarl/pymux#591.
+  `Seat.twins` shows one application in two kept terminals at once,
+  bare in one and through the program under test in the other, and
+  takes a picture of each. The proxy answers the queries, so neither
+  terminal does. Lillecarl/pymux#592.
 * **Drivers** -- run a program on a pty, press keys at it, and fence
   the moment its work is done. Built on `ptyhost`, never around it.
   Lillecarl/pymux#275. `ptyproxy` is the first: the test runs the

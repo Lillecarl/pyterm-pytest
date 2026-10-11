@@ -275,15 +275,25 @@ class Proxy:
         sizes = {viewer.size for viewer in self.viewers}
         return sizes.pop() if len(sizes) == 1 else None
 
-    async def _send(self, data: bytes) -> None:
-        for viewer in list(self.viewers):
+    async def _send(self, data: bytes, viewers: list[_Viewer] | None = None) -> None:
+        for viewer in list(self.viewers if viewers is None else viewers):
             viewer.sent += len(data)
             with contextlib.suppress(anyio.BrokenResourceError, anyio.ClosedResourceError):
                 await viewer.stream.send(data)
 
-    async def inject(self, data: bytes) -> None:
-        "Write `data` to the viewers only; the application never sees it."
-        await self._send(data)
+    async def inject(self, data: bytes, viewers: list[_Viewer] | None = None) -> None:
+        """
+        Write `data` to the viewers only; the application never sees it.
+        `viewers` picks some of them: a fence one terminal takes says
+        nothing about another that shares its clipboard.
+        """
+        await self._send(data, viewers)
+
+    async def let_go(self) -> None:
+        "End the stream to every viewer, which ends each viewer."
+        for viewer in list(self.viewers):
+            with contextlib.suppress(anyio.BrokenResourceError, anyio.ClosedResourceError):
+                await viewer.stream.send_eof()
 
     async def drained(self, seconds: float = WAIT) -> None:
         "Until each viewer's terminal has taken every byte sent to it so far."

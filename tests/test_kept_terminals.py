@@ -16,7 +16,7 @@ from PIL import Image
 from ptyhost.backends.posix_utils import set_terminal_size
 
 from pyterm_pytest import seats as the_seats
-from pyterm_pytest.ptyproxy import Parsed
+from pyterm_pytest.ptyproxy import Parsed, answers_from
 from pyterm_pytest.seats import Seat, Shown
 
 _FENCE = re.compile(rb"\x1b\]52;c;([A-Za-z0-9+/=]*)\x07")
@@ -76,6 +76,8 @@ class FakeSeat(Seat):
                     return
                 with lock:
                     self.received += data
+                    if b"\x1b[c" in data:
+                        os.write(master, b"\x1b[?6c")
                     if self.ignores_ris:
                         data = data.replace(b"\x1bc", b"")
                     screen.feed(data)
@@ -162,4 +164,36 @@ def test_another_command_line_is_another_terminal(seat, tmp_path):
     shown_by(kept, Terminal(), "printf one", tmp_path)
     shown_by(kept, Other(), "printf two", tmp_path)
     assert kept.opened == 2
+
+
+def twins_of(seat, command, work, answer=None):
+    "What each twin shows: the bare one, and the one through a stand-in for the program under test."
+    paths = (work / "bare.png", work / "through.png")
+    logs = (work / "bare.log", work / "through.log")
+    seat.twins(Terminal(), lambda viewer: "OTHER=1 exec " + viewer, command, work, paths, logs, answer)
+    return [Image.open(path).tobytes().decode().rstrip() for path in paths]
+
+
+def test_twins_show_one_run_in_two_kept_terminals(seat, tmp_path):
+    kept = seat()
+    ran = tmp_path / "ran"
+    assert twins_of(kept, "echo >> %s; printf twins" % ran, tmp_path) == ["twins", "twins"]
+    assert ran.read_text() == "\n"
+    assert twins_of(kept, "printf again", tmp_path) == ["again", "again"]
+    assert kept.opened == 2
+
+
+def asked(work):
+    "An application that asks for the device attributes, and keeps what comes back."
+    return "stty -echo -icanon min 0 time 5; printf '\\033[c'; cat > %s" % (work / "answered")
+
+
+def test_neither_twin_answers_the_application(seat, tmp_path):
+    twins_of(seat(), asked(tmp_path), tmp_path)
+    assert (tmp_path / "answered").read_bytes() == b""
+
+
+def test_the_proxy_answers_for_both_twins(seat, tmp_path):
+    twins_of(seat(), asked(tmp_path), tmp_path, answers_from({b"\x1b[c": b"\x1b[?62c"}))
+    assert (tmp_path / "answered").read_bytes() == b"\x1b[?62c"
 
