@@ -11,7 +11,10 @@ of them need the same thing:
   Lillecarl/pymux#276.
 * **Drivers** -- run a program on a pty, press keys at it, and fence
   the moment its work is done. Built on `ptyhost`, never around it.
-  Lillecarl/pymux#275.
+  Lillecarl/pymux#275. `ptyproxy` is the first: the test runs the
+  application and serves its bytes on a socket to any number of
+  terminals, each running the `ptyproxy` viewer, and parses the same
+  bytes into a pyte screen a scenario reads. Lillecarl/pymux#590.
 * **Budgets and recorded lists** -- read a name-to-count file, judge a
   run against one, and complain at a difference in either direction.
   Three copies of that reader exist in the collection today.

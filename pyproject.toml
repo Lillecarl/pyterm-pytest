@@ -22,7 +22,17 @@ requires-python = ">=3.14"
 # pixels is the only way to be sure what was measured.
 dependencies = [
     "pillow",
+    # The proxy's server runs the application on a pty through ptyhost,
+    # and takes anyio from it; it parses what the application wrote with
+    # pyte. Lillecarl/pymux#590.
+    "ptyhost",
+    "pyte",
 ]
+
+[project.scripts]
+# The viewer a terminal runs. Standard library only: every terminal
+# that shows a test pays its import.
+ptyproxy = "pyterm_pytest.ptyproxy_view:main"
 
 [project.optional-dependencies]
 # What a check installs, beside what pyterm-pytest itself needs.
@@ -72,3 +82,7 @@ ignore = [
 
 [tool.ruff.isort]
 known-first-party = ["pyterm_pytest"]
+
+[tool.pytest.ini_options]
+# A coroutine test runs with no mark on it.
+anyio_mode = "auto"
