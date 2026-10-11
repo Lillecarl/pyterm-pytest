@@ -52,6 +52,8 @@ class FakeSeat(Seat):
 
     def _open(self, terminal, command, work, log, stack):
         self.opened += 1
+        # Each terminal answers with its own number, so a test can say whose answer it got.
+        attributes = b"\x1b[?%dc" % self.opened
         master, slave = os.openpty()
         set_terminal_size(master, 4, 10)
         viewer = subprocess.Popen(
@@ -77,7 +79,7 @@ class FakeSeat(Seat):
                 with lock:
                     self.received += data
                     if b"\x1b[c" in data:
-                        os.write(master, b"\x1b[?6c")
+                        os.write(master, attributes)
                     if self.ignores_ris:
                         data = data.replace(b"\x1bc", b"")
                     screen.feed(data)
@@ -166,7 +168,7 @@ def test_another_command_line_is_another_terminal(seat, tmp_path):
     assert kept.opened == 2
 
 
-def twins_of(seat, command, work, answer=None):
+def twins_of(seat, command, work, answer=None, **options):
     "What each twin shows: the bare one, and the one through a stand-in for the program under test."
     paths = (work / "bare.png", work / "through.png")
     logs = (work / "bare.log", work / "through.log")
@@ -174,8 +176,9 @@ def twins_of(seat, command, work, answer=None):
     def director(twins):
         twins.until_it_ends()
         twins.photograph(paths)
+        twins.record(work)
 
-    seat.twins(Terminal(), lambda viewer: "OTHER=1 exec " + viewer, command, work, logs, director, answer)
+    seat.twins(Terminal(), lambda viewer: "OTHER=1 exec " + viewer, command, work, logs, director, answer, **options)
     return [Image.open(path).tobytes().decode().rstrip() for path in paths]
 
 
@@ -189,13 +192,17 @@ def test_twins_show_one_run_in_two_kept_terminals(seat, tmp_path):
 
 
 def asked(work):
-    "An application that asks for the device attributes, and keeps what comes back."
-    return "stty -echo -icanon min 0 time 5; printf '\\033[c'; cat > %s" % (work / "answered")
+    """
+    An application that asks for the device attributes, and keeps what
+    comes back. A copy started through the stand-in has OTHER set, so
+    two copies apart keep theirs apart.
+    """
+    return "stty -echo -icanon min 0 time 5; printf '\\033[c'; cat > %s-$OTHER" % (work / "answered")
 
 
 def test_neither_twin_answers_the_application(seat, tmp_path):
     twins_of(seat(), asked(tmp_path), tmp_path)
-    assert (tmp_path / "answered").read_bytes() == b""
+    assert (tmp_path / "answered-").read_bytes() == b""
 
 
 def test_a_director_drives_the_twins_while_the_application_runs(seat, tmp_path):
@@ -216,7 +223,28 @@ def test_a_director_drives_the_twins_while_the_application_runs(seat, tmp_path):
     assert [Image.open(path).tobytes().decode().rstrip() for path in paths] == ["name? hello ada"] * 2
 
 
+def test_twins_apart_each_hear_their_own_terminal(seat, tmp_path):
+    twins_of(seat(), asked(tmp_path), tmp_path, apart=True)
+    assert (tmp_path / "answered-").read_bytes() == b"\x1b[?1c"
+    assert (tmp_path / "answered-1").read_bytes() == b"\x1b[?2c"
+
+
+def test_twins_apart_run_the_application_once_each(seat, tmp_path):
+    ran = tmp_path / "ran"
+    assert twins_of(seat(), "echo >> %s; printf apart" % ran, tmp_path, apart=True) == ["apart", "apart"]
+    assert ran.read_text() == "\n\n"
+
+
+@pytest.mark.parametrize("apart", [False, True])
+def test_each_terminals_replies_are_recorded(seat, tmp_path, apart):
+    "Shared, the proxy drops both answers; they are kept anyway, to be compared."
+    twins_of(seat(), asked(tmp_path), tmp_path, apart=apart)
+    assert "b'\\x1b[?1c'" in (tmp_path / "bare-replies.txt").read_text()
+    assert "b'\\x1b[?2c'" in (tmp_path / "through-replies.txt").read_text()
+    assert (tmp_path / "through-output.bin").exists() == apart
+
+
 def test_the_proxy_answers_for_both_twins(seat, tmp_path):
     twins_of(seat(), asked(tmp_path), tmp_path, answers_from({b"\x1b[c": b"\x1b[?62c"}))
-    assert (tmp_path / "answered").read_bytes() == b"\x1b[?62c"
+    assert (tmp_path / "answered-").read_bytes() == b"\x1b[?62c"
 

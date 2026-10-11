@@ -547,65 +547,104 @@ class Seat:
         answer=None,
         environment=None,
         directory=None,
+        apart=False,
     ):
         """
-        Run `command` once, shown at the same time by two kept terminals
-        of one kind, and hand `director` a `Twins` that drives it and
+        Run `command` shown at the same time by two kept terminals of
+        one kind, and hand `director` a `Twins` that drives it and
         photographs both. What the director returns, this returns.
 
         The first terminal shows it bare. The second shows it through
         the program under test: `through` takes the shell command that
         runs a viewer, and gives back the command that runs that viewer
-        inside the program. Both viewers attach to one proxy of their
-        own, so both terminals get the same bytes, and the application
-        starts once they agree on one size. Lillecarl/pymux#592.
+        inside the program. Lillecarl/pymux#592.
 
-        The application starts in the environment the bare terminal gave
-        its viewer, with `environment` laid over it, in `directory`.
+        **Shared, by default: one run, one stream.** Both viewers attach
+        to one proxy, so both terminals get the same bytes, and a pixel
+        that differs is the program under test drawing them differently.
+        The application starts once both agree on one size, in the
+        environment the bare terminal gave its viewer. Neither terminal
+        answers a query: the proxy answers from `answer`, an empty table
+        unless given. Two terminals would give the application two
+        answers.
 
-        **Neither terminal answers a query.** The proxy answers from
-        `answer`, an empty table unless given, and drops what either
-        terminal sends. Two terminals would give the application two
-        answers, and the bare one could not be told from the other.
+        **`apart`: one run for each terminal.** Each viewer has a proxy
+        of its own, and each copy of the application starts as that
+        terminal would start it and hears that terminal's answers. A
+        pixel that differs is then what a person sees differ, answers
+        included. It is for an application whose drawing follows what
+        the terminal says -- yazi picks an image protocol by it, and
+        sizes a picture by the cell's pixels.
+
+        Either way, `environment` is laid over the start, in `directory`,
+        and what each terminal sent is kept: `Twins.record`.
         """
         portal = self._the_portal()
-        served = Path(work) / ("twins-%s.sock" % os.urandom(4).hex())
-        viewer = shlex.join([*VIEWER, str(served)])
-        sides = (("bare", "exec " + viewer), ("through", through(viewer)))
         what = "%s of %s" % (self.subject, terminal.name)
-        with portal.wrap_async_context_manager(Proxy.serving(served)) as proxy, contextlib.ExitStack() as stack:
+        roles = ("bare", "through")
+        named = os.urandom(4).hex()
+        if apart:
+            sockets = [Path(work) / ("twins-%s-%s.sock" % (named, role)) for role in roles]
+        else:
+            sockets = [Path(work) / ("twins-%s.sock" % named)] * len(roles)
+        with contextlib.ExitStack() as stack:
+            proxies = {
+                served: stack.enter_context(portal.wrap_async_context_manager(Proxy.serving(served)))
+                for served in dict.fromkeys(sockets)
+            }
             ran = []
-            for (role, side), log_path in zip(sides, log_paths):
-                ran.append(stack.enter_context(self._run(terminal, side, work, log_path, role)))
+            for role, served, log_path in zip(roles, sockets, log_paths):
+                proxy = proxies[served]
+                viewer = shlex.join([*VIEWER, str(served)])
+                ran.append(
+                    stack.enter_context(
+                        self._run(terminal, "exec " + viewer if role == "bare" else through(viewer), work, log_path, role)
+                    )
+                )
+                attached = sockets[: len(ran)].count(served)
                 try:
                     portal.call(
                         proxy.until,
-                        lambda: len(proxy.viewers) == len(ran),
-                        "the %s viewer never reached the twins' proxy" % role,
+                        lambda proxy=proxy, attached=attached: len(proxy.viewers) == attached,
+                        "the %s viewer never reached its proxy" % role,
                         APPEAR_TIMEOUT,
                     )
                 except TimeoutError as reason:
                     raise RuntimeError("%s: %s\n%s" % (what, reason, _tail(log_path))) from None
-            viewers = list(proxy.viewers)
-            application = portal.wrap_async_context_manager(
-                proxy.application(
-                    ["sh", "-c", command],
-                    viewers=len(sides),
-                    environment={**(viewers[0].environment or {}), **(environment or {})},
-                    directory=directory,
-                    answer=answers_from({}) if answer is None else answer,
-                    wait=APPEAR_TIMEOUT,
+            viewers = [proxies[served].viewers[0 if apart else number] for number, served in enumerate(sockets)]
+
+            def started(served, count, viewer, answered):
+                return portal.wrap_async_context_manager(
+                    proxies[served].application(
+                        ["sh", "-c", command],
+                        viewers=count,
+                        environment={**(viewer.environment or {}), **(environment or {})},
+                        directory=directory,
+                        answer=answered,
+                        wait=APPEAR_TIMEOUT,
+                    )
                 )
-            )
+
             try:
-                with application as running:
+                with contextlib.ExitStack() as running:
+                    if apart:
+                        applications = [
+                            running.enter_context(started(served, 1, viewer, None))
+                            for served, viewer in zip(sockets, viewers)
+                        ]
+                    else:
+                        table = answers_from({}) if answer is None else answer
+                        applications = [running.enter_context(started(sockets[0], len(roles), viewers[0], table))] * 2
                     sides = [
-                        _Side(role, shown, side, ended, one, log_path)
-                        for (role, _), (shown, side, ended), one, log_path in zip(sides, ran, viewers, log_paths)
+                        _Side(role, shown, side, ended, viewer, log_path, proxies[served], application)
+                        for role, (shown, side, ended), viewer, log_path, served, application in zip(
+                            roles, ran, viewers, log_paths, sockets, applications
+                        )
                     ]
-                    return director(Twins(self, portal, proxy, running, sides, work, what))
+                    return director(Twins(self, portal, sides, work, what))
             finally:
-                portal.call(proxy.let_go)
+                for proxy in proxies.values():
+                    portal.call(proxy.let_go)
                 for _, side, _ in ran:
                     with contextlib.suppress(TimeoutError):
                         portal.call(_until_it_ends, side, APPEAR_TIMEOUT)
@@ -722,13 +761,6 @@ async def _until_it_ends(application, seconds):
         await application.ended.wait()
 
 
-async def _between_sequences(application, seconds):
-    "Until the application's stream does not stop inside a control sequence."
-    with anyio.fail_after(seconds):
-        while application._queries.held:
-            await application._changed.wait()
-
-
 @dataclass
 class _Side:
     "One of two twins: the kept terminal, what runs in it, and its viewer on the twins' proxy."
@@ -739,51 +771,99 @@ class _Side:
     ended: object
     viewer: object
     log: Path
+    #: The proxy this side's viewer is on, and the application it shows:
+    #: one of each for both sides, or one each when they run apart.
+    proxy: Proxy
+    application: object
 
 
 class Twins:
     """
-    One application, shown by two kept terminals at once: what a
-    director drives. `Seat.twins` makes one. Lillecarl/pymux#593.
+    An application shown by two kept terminals at once: what a director
+    drives. `Seat.twins` makes one. Lillecarl/pymux#593.
 
     A scenario is steps on it: `press` keys, wait until the application
     `shows` some text, and `photograph` both terminals. The waits read
     the pyte screen the proxy feeds in this process, so they cost no
-    picture.
+    picture. When the twins run apart, a key goes to both copies and a
+    wait holds for both.
     """
 
-    def __init__(self, seat, portal, proxy, application, sides, work, what):
+    def __init__(self, seat, portal, sides, work, what):
         self._seat = seat
         self._portal = portal
-        self._proxy = proxy
-        self.application = application
         self.sides = sides
         self._work = Path(work)
         self.what = what
 
+    @property
+    def application(self):
+        "The bare side's application, which is the only one unless they run apart."
+        return self.sides[0].application
+
+    @property
+    def applications(self):
+        "Each application once."
+        return list({id(side.application): side.application for side in self.sides}.values())
+
     def press(self, keys):
-        "Give the application keys, as bytes or text."
+        "Give each application keys, as bytes or text."
         if isinstance(keys, str):
             keys = keys.encode()
-        self._portal.call(self.application.write, keys)
+        for application in self.applications:
+            self._portal.call(application.write, keys)
 
-    def rows(self):
-        "What the application shows, one string per row."
-        return self._portal.call(self.application.parsed.rows)
+    def rows(self, side=0):
+        "What a side's application shows, one string per row."
+        return self._portal.call(self.sides[side].application.parsed.rows)
 
     def shows(self, text, seconds=APPEAR_TIMEOUT):
-        "Until a row of the application's screen holds `text`."
+        "Until a row of each application's screen holds `text`."
         try:
-            self._portal.call(self.application.shows, text, seconds)
+            for application in self.applications:
+                self._portal.call(application.shows, text, seconds)
         except TimeoutError as reason:
             raise RuntimeError("%s: %s" % (self.what, reason)) from None
 
+    def until(self, holds, what, seconds=APPEAR_TIMEOUT):
+        "Until `holds(rows)` is true of each application's screen, or fail saying `what`."
+        deadline = time.time() + seconds
+        for side in range(len(self.applications)):
+            while not holds(self.rows(side)):
+                if time.time() >= deadline:
+                    raise RuntimeError(
+                        "%s: %s, after %g s, on the %s side:\n%s"
+                        % (self.what, what, seconds, self.sides[side].role, "\n".join(self.rows(side)))
+                    )
+                time.sleep(0.05)
+
     def until_it_ends(self, seconds=PICTURE_TIMEOUT):
+        "Until each application ends, and give back the bare side's exit code."
         try:
-            self._portal.call(_until_it_ends, self.application, seconds)
+            for application in self.applications:
+                self._portal.call(_until_it_ends, application, seconds)
         except TimeoutError:
             raise RuntimeError("%s: the application ran past %gs" % (self.what, seconds)) from None
         return self.application.backend.returncode
+
+    def record(self, room):
+        """
+        Write what each application wrote and what each terminal sent
+        into `room`: `<side>-output.bin` once for each application, and
+        `<side>-replies.txt` with a line for each thing a terminal sent,
+        at the offset into the output where it came. The terminals send
+        their answers even when the proxy drops them, so two lists side
+        by side say how each answers the same queries.
+        """
+        room = Path(room)
+        recorded = set()
+        for side in self.sides:
+            if id(side.application) not in recorded:
+                recorded.add(id(side.application))
+                (room / ("%s-output.bin" % side.role)).write_bytes(bytes(side.application.output))
+            (room / ("%s-replies.txt" % side.role)).write_text(
+                "".join("%d %r\n" % (offset, payload) for offset, payload in side.viewer.replies)
+            )
 
     def photograph(self, paths):
         """
@@ -792,18 +872,12 @@ class Twins:
 
         Each side first takes a fence of its own, injected to its viewer
         alone, so a seat whose terminals share a clipboard still reads
-        which one took it. The fence waits for the application's stream
-        to leave any control sequence it stopped in, because a fence
-        inside one would break it.
+        which one took it. `Proxy.inject` keeps it out of the middle of
+        a control sequence.
         """
-        try:
-            self._portal.call(_between_sequences, self.application, APPEAR_TIMEOUT)
-        except TimeoutError:
-            raise RuntimeError("%s: the application stopped inside a control sequence" % self.what) from None
         seat = self._seat
         drawing = [pid for side in self.sides for pid in [*side.shown.roots, side.running.backend.pid]]
-        if not self.application.ended.is_set():
-            drawing.append(self.application.backend.pid)
+        drawing += [each.backend.pid for each in self.applications if not each.ended.is_set()]
         for side, path in zip(self.sides, paths):
             what = "%s, %s" % (self.what, side.role)
             token = os.urandom(8).hex()
@@ -819,7 +893,7 @@ class Twins:
                         side.ended,
                         what,
                         side.log,
-                        again=lambda: self._portal.call(self._proxy.inject, fenced, [side.viewer]),
+                        again=lambda: self._portal.call(side.proxy.inject, fenced, [side.viewer]),
                     )
                 except RuntimeError:
                     side.shown.take(Path(path).with_name("%s-unfenced.png" % Path(path).stem))
