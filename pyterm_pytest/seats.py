@@ -536,10 +536,22 @@ class Seat:
             terminal, command, work, log_path, lambda shown, ended: director(shown.take, ended)
         )
 
-    def twins(self, terminal, through, command, work, paths, log_paths, answer=None):
+    def twins(
+        self,
+        terminal,
+        through,
+        command,
+        work,
+        log_paths,
+        director,
+        answer=None,
+        environment=None,
+        directory=None,
+    ):
         """
         Run `command` once, shown at the same time by two kept terminals
-        of one kind, and leave a picture of each at the two `paths`.
+        of one kind, and hand `director` a `Twins` that drives it and
+        photographs both. What the director returns, this returns.
 
         The first terminal shows it bare. The second shows it through
         the program under test: `through` takes the shell command that
@@ -548,15 +560,13 @@ class Seat:
         own, so both terminals get the same bytes, and the application
         starts once they agree on one size. Lillecarl/pymux#592.
 
+        The application starts in the environment the bare terminal gave
+        its viewer, with `environment` laid over it, in `directory`.
+
         **Neither terminal answers a query.** The proxy answers from
         `answer`, an empty table unless given, and drops what either
         terminal sends. Two terminals would give the application two
         answers, and the bare one could not be told from the other.
-
-        Once the application ends, each side gets a fence of its own
-        and a picture once it settles. A fence goes to one viewer only,
-        so a seat whose terminals share a clipboard still reads which
-        one took it.
         """
         portal = self._the_portal()
         served = Path(work) / ("twins-%s.sock" % os.urandom(4).hex())
@@ -581,41 +591,19 @@ class Seat:
                 proxy.application(
                     ["sh", "-c", command],
                     viewers=len(sides),
-                    environment=viewers[0].environment,
+                    environment={**(viewers[0].environment or {}), **(environment or {})},
+                    directory=directory,
                     answer=answers_from({}) if answer is None else answer,
                     wait=APPEAR_TIMEOUT,
                 )
             )
             try:
                 with application as running:
-                    try:
-                        portal.call(_until_it_ends, running, PICTURE_TIMEOUT)
-                    except TimeoutError:
-                        raise RuntimeError("%s: the application ran past %gs" % (what, PICTURE_TIMEOUT)) from None
-                    drawing = [pid for shown, side, _ in ran for pid in [*shown.roots, side.backend.pid]]
-                    for (role, _), (shown, _, ended), one, path, log_path in zip(sides, ran, viewers, paths, log_paths):
-                        side_what = "%s, %s" % (what, role)
-                        token = os.urandom(8).hex()
-                        fenced = b"\x1b]52;c;%s\x07" % base64.b64encode(token.encode())
-                        room = Path(work) / role
-                        room.mkdir(exist_ok=True)
-                        self._using(shown, *drawing)
-                        try:
-                            try:
-                                wait_for_the_clipboard(
-                                    self.clipboard,
-                                    token,
-                                    ended,
-                                    side_what,
-                                    log_path,
-                                    again=lambda: portal.call(proxy.inject, fenced, [one]),
-                                )
-                            except RuntimeError:
-                                shown.take(path.with_name("%s-unfenced.png" % path.stem))
-                                raise
-                            _settle(room, path, shown.take, ended, side_what, log_path, how_busy=self.how_busy)
-                        finally:
-                            self._using(None)
+                    sides = [
+                        _Side(role, shown, side, ended, one, log_path)
+                        for (role, _), (shown, side, ended), one, log_path in zip(sides, ran, viewers, log_paths)
+                    ]
+                    return director(Twins(self, portal, proxy, running, sides, work, what))
             finally:
                 portal.call(proxy.let_go)
                 for _, side, _ in ran:
@@ -732,6 +720,113 @@ class Seat:
 async def _until_it_ends(application, seconds):
     with anyio.fail_after(seconds):
         await application.ended.wait()
+
+
+async def _between_sequences(application, seconds):
+    "Until the application's stream does not stop inside a control sequence."
+    with anyio.fail_after(seconds):
+        while application._queries.held:
+            await application._changed.wait()
+
+
+@dataclass
+class _Side:
+    "One of two twins: the kept terminal, what runs in it, and its viewer on the twins' proxy."
+
+    role: str
+    shown: Shown
+    running: object
+    ended: object
+    viewer: object
+    log: Path
+
+
+class Twins:
+    """
+    One application, shown by two kept terminals at once: what a
+    director drives. `Seat.twins` makes one. Lillecarl/pymux#593.
+
+    A scenario is steps on it: `press` keys, wait until the application
+    `shows` some text, and `photograph` both terminals. The waits read
+    the pyte screen the proxy feeds in this process, so they cost no
+    picture.
+    """
+
+    def __init__(self, seat, portal, proxy, application, sides, work, what):
+        self._seat = seat
+        self._portal = portal
+        self._proxy = proxy
+        self.application = application
+        self.sides = sides
+        self._work = Path(work)
+        self.what = what
+
+    def press(self, keys):
+        "Give the application keys, as bytes or text."
+        if isinstance(keys, str):
+            keys = keys.encode()
+        self._portal.call(self.application.write, keys)
+
+    def rows(self):
+        "What the application shows, one string per row."
+        return self._portal.call(self.application.parsed.rows)
+
+    def shows(self, text, seconds=APPEAR_TIMEOUT):
+        "Until a row of the application's screen holds `text`."
+        try:
+            self._portal.call(self.application.shows, text, seconds)
+        except TimeoutError as reason:
+            raise RuntimeError("%s: %s" % (self.what, reason)) from None
+
+    def until_it_ends(self, seconds=PICTURE_TIMEOUT):
+        try:
+            self._portal.call(_until_it_ends, self.application, seconds)
+        except TimeoutError:
+            raise RuntimeError("%s: the application ran past %gs" % (self.what, seconds)) from None
+        return self.application.backend.returncode
+
+    def photograph(self, paths):
+        """
+        A picture of each terminal once it settles: the bare one at the
+        first of `paths`, the other at the second.
+
+        Each side first takes a fence of its own, injected to its viewer
+        alone, so a seat whose terminals share a clipboard still reads
+        which one took it. The fence waits for the application's stream
+        to leave any control sequence it stopped in, because a fence
+        inside one would break it.
+        """
+        try:
+            self._portal.call(_between_sequences, self.application, APPEAR_TIMEOUT)
+        except TimeoutError:
+            raise RuntimeError("%s: the application stopped inside a control sequence" % self.what) from None
+        seat = self._seat
+        drawing = [pid for side in self.sides for pid in [*side.shown.roots, side.running.backend.pid]]
+        if not self.application.ended.is_set():
+            drawing.append(self.application.backend.pid)
+        for side, path in zip(self.sides, paths):
+            what = "%s, %s" % (self.what, side.role)
+            token = os.urandom(8).hex()
+            fenced = b"\x1b]52;c;%s\x07" % base64.b64encode(token.encode())
+            room = self._work / side.role
+            room.mkdir(exist_ok=True)
+            seat._using(side.shown, *drawing)
+            try:
+                try:
+                    wait_for_the_clipboard(
+                        seat.clipboard,
+                        token,
+                        side.ended,
+                        what,
+                        side.log,
+                        again=lambda: self._portal.call(self._proxy.inject, fenced, [side.viewer]),
+                    )
+                except RuntimeError:
+                    side.shown.take(Path(path).with_name("%s-unfenced.png" % Path(path).stem))
+                    raise
+                _settle(room, path, side.shown.take, side.ended, what, side.log, how_busy=seat.how_busy)
+            finally:
+                seat._using(None)
 
 
 def wait_for_the_file(path, ended, what, log_path, timeout=APPEAR_TIMEOUT):

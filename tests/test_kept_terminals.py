@@ -170,7 +170,12 @@ def twins_of(seat, command, work, answer=None):
     "What each twin shows: the bare one, and the one through a stand-in for the program under test."
     paths = (work / "bare.png", work / "through.png")
     logs = (work / "bare.log", work / "through.log")
-    seat.twins(Terminal(), lambda viewer: "OTHER=1 exec " + viewer, command, work, paths, logs, answer)
+
+    def director(twins):
+        twins.until_it_ends()
+        twins.photograph(paths)
+
+    seat.twins(Terminal(), lambda viewer: "OTHER=1 exec " + viewer, command, work, logs, director, answer)
     return [Image.open(path).tobytes().decode().rstrip() for path in paths]
 
 
@@ -191,6 +196,24 @@ def asked(work):
 def test_neither_twin_answers_the_application(seat, tmp_path):
     twins_of(seat(), asked(tmp_path), tmp_path)
     assert (tmp_path / "answered").read_bytes() == b""
+
+
+def test_a_director_drives_the_twins_while_the_application_runs(seat, tmp_path):
+    paths = (tmp_path / "bare.png", tmp_path / "through.png")
+
+    def director(twins):
+        twins.shows("name?")
+        twins.press("ada\r")
+        twins.shows("ada")
+        twins.photograph(paths)
+        return "".join(twins.rows()).rstrip()
+
+    asks = "stty -echo; printf 'name? '; read name; printf 'hello %s' \"$name\"; sleep 30"
+    seen = seat().twins(
+        Terminal(), lambda viewer: "exec " + viewer, asks, tmp_path, (tmp_path / "b.log", tmp_path / "t.log"), director
+    )
+    assert seen == "name? hello ada"
+    assert [Image.open(path).tobytes().decode().rstrip() for path in paths] == ["name? hello ada"] * 2
 
 
 def test_the_proxy_answers_for_both_twins(seat, tmp_path):
