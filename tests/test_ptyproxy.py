@@ -202,6 +202,33 @@ async def test_an_injection_reaches_the_terminals_and_not_the_application(proxy)
             assert RESET not in app.output
 
 
+async def test_an_injection_waits_for_the_end_of_a_sequence(proxy):
+    "A fence inside a sixel made foot draw the sixel as text."
+    command = python(
+        "import os, sys, time\n"
+        "os.write(1, b'\\x1bPq#0;2;0;0;0')\n"
+        "sys.stdin.buffer.read(1)\n"
+        "os.write(1, b'#0~~\\x1b\\\\after')\n"
+        "time.sleep(30)\n"
+    )
+    async with terminal(proxy.path, no_input=True) as shown:
+        async with proxy.application(command, answer=answers_from({})) as app:
+            await shown.until(b"\x1bPq")
+            await proxy.inject(b"FENCE")
+            app.write(b"x")
+            await shown.until(b"FENCE")
+            assert shown.received.index(b"FENCE") > shown.received.index(b"\x1b\\")
+
+
+async def test_an_injection_outlives_an_application_that_stops_inside_a_sequence(proxy):
+    async with terminal(proxy.path, no_input=True) as shown:
+        async with proxy.application(python("import os; os.write(1, b'\\x1b[1')"), answer=answers_from({})) as app:
+            await shown.until(b"\x1b[1")
+            await proxy.inject(b"FENCE")
+            await app.ended.wait()
+        await shown.until(b"FENCE")
+
+
 async def test_an_application_may_start_where_the_terminal_would_start_it(proxy, monkeypatch):
     monkeypatch.setenv("TERM", "a-terminal-of-its-own")
     async with terminal(proxy.path) as shown:

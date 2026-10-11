@@ -66,6 +66,9 @@ WAIT = 10.0
 _SEQUENCE = re.compile(
     rb"\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]"
     rb"|\x1b[P\]_^X][^\x07\x1b]*(?:\x07|\x1b\\)"
+    # An escape of its own, such as ESC 7 or ESC ( B: it asks nothing,
+    # and the stream is between sequences after it.
+    rb"|\x1b[\x20-\x2f]*[\x30-\x4f\x51-\x57\x59\x5a\x5c\x60-\x7e]"
 )
 
 #: An unfinished sequence held across reads is at most this long.
@@ -102,6 +105,11 @@ class _Viewer:
     size: tuple[int, int] | None = None
     sent: int = 0
     taken: int = 0
+    #: Everything the terminal sent while an application ran, kept
+    #: whether it reached the application or not: how far into the
+    #: application's output it came, and the bytes. Two terminals'
+    #: lists side by side say how each answers the same queries.
+    replies: list[tuple[int, bytes]] = field(default_factory=list)
 
 
 class Parsed:
@@ -179,9 +187,13 @@ class Application:
             self.output += data
             for listener in self.listeners:
                 listener(data)
-            await self.proxy._send(data)
+            async with self.proxy._order:
+                await self.proxy._send(data)
+                queries = self._queries.feed(data)
+                if not self._queries.held:
+                    await self.proxy._flush()
             if self.answer is not None:
-                for query in self._queries.feed(data):
+                for query in queries:
                     reply = self.answer(query)
                     if reply is not None:
                         self.write(reply)
@@ -200,6 +212,12 @@ class Proxy:
         #: The application the viewers show now, if one runs.
         self.running: Application | None = None
         self._changed = anyio.Event()
+        #: Held for each send, so an injection lands between two of the
+        #: application's sends and never inside one.
+        self._order = anyio.Lock()
+        #: Injections waiting for the application's stream to leave a
+        #: control sequence, with the viewers each is for.
+        self._waiting: list[tuple[bytes, list[_Viewer] | None]] = []
 
     @classmethod
     @contextlib.asynccontextmanager
@@ -266,6 +284,8 @@ class Proxy:
             viewer.environment = {name: value for name, _, value in pairs}
         elif kind == INPUT:
             application = self.running
+            if application is not None:
+                viewer.replies.append((len(application.output), payload))
             if application is not None and application.answer is None:
                 application.write(payload)
         self._change()
@@ -286,8 +306,23 @@ class Proxy:
         Write `data` to the viewers only; the application never sees it.
         `viewers` picks some of them: a fence one terminal takes says
         nothing about another that shares its clipboard.
+
+        **It never lands inside a control sequence.** While what the
+        application sent last stops inside one, `data` waits for the
+        send that ends it. Measured: a fence inside yazi's sixel made
+        foot draw the sixel as text.
         """
-        await self._send(data, viewers)
+        async with self._order:
+            running = self.running
+            if running is not None and running._queries.held:
+                self._waiting.append((data, viewers))
+            else:
+                await self._send(data, viewers)
+
+    async def _flush(self) -> None:
+        waiting, self._waiting = self._waiting, []
+        for data, viewers in waiting:
+            await self._send(data, viewers)
 
     async def let_go(self) -> None:
         "End the stream to every viewer, which ends each viewer."
@@ -354,3 +389,5 @@ class Proxy:
         finally:
             self.running = None
             backend.close()
+            async with self._order:
+                await self._flush()
