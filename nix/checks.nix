@@ -23,6 +23,8 @@
   callPackage,
   testSources,
   waylandProtocols,
+  # `ps`, which reads a viewer's argv[0] the way a multiplexer does.
+  procps,
 }:
 let
   inherit (callPackage ./suite.nix { }) suite;
@@ -49,7 +51,10 @@ in
 {
   unit = suite {
     name = "pyterm-pytest-unit";
-    inputs = [ testEnv ];
+    inputs = [
+      testEnv
+      procps
+    ];
     env = { inherit selection; };
     setup = prepare;
   } "python -m pytest $selection -q -p no:cacheprovider";

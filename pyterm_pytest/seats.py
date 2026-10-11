@@ -548,6 +548,7 @@ class Seat:
         environment=None,
         directory=None,
         apart=False,
+        named=None,
     ):
         """
         Run `command` shown at the same time by two kept terminals of
@@ -578,15 +579,20 @@ class Seat:
 
         Either way, `environment` is laid over the start, in `directory`,
         and what each terminal sent is kept: `Twins.record`.
+
+        `named` runs each viewer under the application's name, so the
+        program under test sees that name in front, as it would with
+        the application itself in its pane. pymux lies to some programs
+        by name.
         """
         portal = self._the_portal()
         what = "%s of %s" % (self.subject, terminal.name)
         roles = ("bare", "through")
-        named = os.urandom(4).hex()
+        run = os.urandom(4).hex()
         if apart:
-            sockets = [Path(work) / ("twins-%s-%s.sock" % (named, role)) for role in roles]
+            sockets = [Path(work) / ("twins-%s-%s.sock" % (run, role)) for role in roles]
         else:
-            sockets = [Path(work) / ("twins-%s.sock" % named)] * len(roles)
+            sockets = [Path(work) / ("twins-%s.sock" % run)] * len(roles)
         with contextlib.ExitStack() as stack:
             proxies = {
                 served: stack.enter_context(portal.wrap_async_context_manager(Proxy.serving(served)))
@@ -596,6 +602,8 @@ class Seat:
             for role, served, log_path in zip(roles, sockets, log_paths):
                 proxy = proxies[served]
                 viewer = shlex.join([*VIEWER, str(served)])
+                if named:
+                    viewer = named_command(viewer, named, Path(work) / ("%s-%s.sh" % (served.stem, role)))
                 ran.append(
                     stack.enter_context(
                         self._run(terminal, "exec " + viewer if role == "bare" else through(viewer), work, log_path, role)
@@ -754,6 +762,24 @@ class Seat:
     #: a picture of one window among several; the Wayland seat takes the
     #: whole output, because the compositor holds one window.
     subject = "the picture"
+
+
+def named_command(command, name, script):
+    """
+    A command line that runs `command` under a process named `name`,
+    written to `script`. Lillecarl/pymux#593.
+
+    A multiplexer names the program in a pane's foreground by the
+    argv[0] of its process group's leader. Here the leader is a bash
+    that took `name` with `exec -a` and runs `command` as its child;
+    the command cannot take the name itself, because a nix Python
+    wrapper sets argv[0] to its own path, which is how the virtualenv
+    finds itself. `exit $?` keeps bash from replacing itself with the
+    child. It is a file and not one line, because a pymux pane splits
+    its command on whitespace and cannot take the quoting.
+    """
+    Path(script).write_text("exec -a %s bash -c %s\n" % (shlex.quote(name), shlex.quote(command + "; exit $?")))
+    return "bash %s" % shlex.quote(str(script))
 
 
 async def _until_it_ends(application, seconds):

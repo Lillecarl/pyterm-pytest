@@ -17,7 +17,7 @@ from ptyhost.backends.posix_utils import set_terminal_size
 
 from pyterm_pytest import seats as the_seats
 from pyterm_pytest.ptyproxy import Parsed, answers_from
-from pyterm_pytest.seats import Seat, Shown
+from pyterm_pytest.seats import Seat, Shown, named_command
 
 _FENCE = re.compile(rb"\x1b\]52;c;([A-Za-z0-9+/=]*)\x07")
 
@@ -242,6 +242,24 @@ def test_each_terminals_replies_are_recorded(seat, tmp_path, apart):
     assert "b'\\x1b[?1c'" in (tmp_path / "bare-replies.txt").read_text()
     assert "b'\\x1b[?2c'" in (tmp_path / "through-replies.txt").read_text()
     assert (tmp_path / "through-output.bin").exists() == apart
+
+
+def test_a_named_command_runs_under_that_name(tmp_path):
+    "A multiplexer names the program in front by its group leader's argv[0]."
+    ran = tmp_path / "ran"
+    command = named_command("echo ran > %s; sleep 30" % ran, "yazi", tmp_path / "named.sh")
+    leader = subprocess.Popen(["sh", "-c", "exec " + command])
+    try:
+        for _ in range(500):
+            if ran.exists():
+                break
+            threading.Event().wait(0.01)
+        shown = subprocess.run(["ps", "-o", "args=", "-p", str(leader.pid)], capture_output=True, text=True)
+        assert shown.stdout.split()[0] == "yazi"
+        assert ran.read_text() == "ran\n"
+    finally:
+        leader.kill()
+        leader.wait()
 
 
 def test_the_proxy_answers_for_both_twins(seat, tmp_path):
