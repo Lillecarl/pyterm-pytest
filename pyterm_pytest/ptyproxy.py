@@ -50,7 +50,7 @@ from ptyhost.backends.posix import PosixBackend
 from ptyhost.spawn import Spawn
 from pyte import Screen, Stream
 
-from .ptyproxy_view import COUNT, INPUT, ROWS_COLUMNS, SIZE, TAKEN, Frames
+from .ptyproxy_view import COUNT, ENVIRONMENT, INPUT, ROWS_COLUMNS, SIZE, TAKEN, Frames
 
 __all__ = ["RESET", "Application", "Parsed", "Proxy", "answers_from"]
 
@@ -97,6 +97,8 @@ class _Queries:
 @dataclass
 class _Viewer:
     stream: anyio.abc.ByteStream
+    #: What the terminal gave its viewer, for an application to start in.
+    environment: dict[str, str] | None = None
     size: tuple[int, int] | None = None
     sent: int = 0
     taken: int = 0
@@ -259,6 +261,9 @@ class Proxy:
                 application._resize(*viewer.size)
         elif kind == TAKEN:
             (viewer.taken,) = COUNT.unpack(payload)
+        elif kind == ENVIRONMENT:
+            pairs = (os.fsdecode(pair).partition("=") for pair in payload.split(b"\0") if pair)
+            viewer.environment = {name: value for name, _, value in pairs}
         elif kind == INPUT:
             application = self.running
             if application is not None and application.answer is None:
@@ -296,6 +301,7 @@ class Proxy:
         *,
         viewers: int = 1,
         environment: Mapping[str, str] | None = None,
+        as_the_terminal: bool = False,
         directory: str | None = None,
         answer: Answer | None = None,
         size: tuple[int, int] | None = None,
@@ -308,7 +314,9 @@ class Proxy:
         The application starts from `environment` alone, not from the
         test's: a variable that pytest happens to carry is not one the
         application should see. With none, it gets `PATH` and nothing
-        else to go on. It ends with the block.
+        else to go on. `as_the_terminal` starts it in the environment the
+        first terminal gave its viewer instead, with `environment` laid
+        over that. It ends with the block.
         """
         assert self.running is None, "one application at a time"
 
@@ -318,7 +326,9 @@ class Proxy:
 
         await self.until(agreed, "the terminals did not attach at one size", wait)
         rows, columns = self._one_size()
-        if environment is None:
+        if as_the_terminal:
+            environment = {**(self.viewers[0].environment or {}), **(environment or {})}
+        elif environment is None:
             environment = {"PATH": os.environ.get("PATH", "")}
         spawn = Spawn(list(command), dict(environment), directory)
         backend = PosixBackend(lambda: spawn)

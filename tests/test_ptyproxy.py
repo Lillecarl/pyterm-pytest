@@ -195,9 +195,22 @@ async def test_an_injection_reaches_the_terminals_and_not_the_application(proxy)
             await one.until(b"ready;")
             await proxy.inject(RESET)
             await proxy.drained()
-            assert one.received.endswith(RESET)
-            assert two.received.endswith(RESET)
+            # Drained is in the pty; the reader of this side may not have it yet.
+            for shown in (one, two):
+                await shown.until(RESET)
+                assert shown.received.endswith(RESET)
             assert RESET not in app.output
+
+
+async def test_an_application_may_start_where_the_terminal_would_start_it(proxy, monkeypatch):
+    monkeypatch.setenv("TERM", "a-terminal-of-its-own")
+    async with terminal(proxy.path) as shown:
+        monkeypatch.setenv("TERM", "the-test's")
+        command = ["sh", "-c", 'printf "TERM=%s;" "$TERM"; exit 3']
+        async with proxy.application(command, as_the_terminal=True) as app:
+            await app.ended.wait()
+            assert app.backend.returncode == 3
+        await shown.until(b"TERM=a-terminal-of-its-own;")
 
 
 async def test_a_terminal_outlives_an_application(proxy):

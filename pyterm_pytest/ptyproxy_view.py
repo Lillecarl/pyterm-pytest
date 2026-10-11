@@ -9,7 +9,8 @@ to the terminal, byte for byte. It tells the test its size, and again on
 each SIGWINCH, and after each write it says how many bytes the terminal
 has taken. With input on, what the terminal sends -- keys, and answers
 to the application's queries -- goes back up. With it off, the viewer
-still reads the terminal's input and drops it.
+still reads the terminal's input and drops it. First of all it sends
+the environment the terminal gave it.
 
 **Raw mode on both ends, input off or not.** Output processing turns a
 `\\n` into `\\r\\n`, so the terminal would not get the application's
@@ -34,7 +35,7 @@ import struct
 import termios
 import tty
 
-__all__ = ["INPUT", "SIZE", "TAKEN", "Frames", "frame", "main", "view"]
+__all__ = ["ENVIRONMENT", "INPUT", "SIZE", "TAKEN", "Frames", "frame", "main", "view"]
 
 #: Rows and columns, as two unsigned shorts.
 SIZE = b"S"
@@ -43,6 +44,11 @@ INPUT = b"I"
 #: How many bytes the terminal has taken so far, written and drained, as
 #: an unsigned long long.
 TAKEN = b"T"
+#: The environment the terminal gave the viewer, once, first: `NAME=value`
+#: pairs, each ended by a NUL. The terminal sets TERM, COLORTERM and its
+#: own names there, and an application started anywhere else would not
+#: see them.
+ENVIRONMENT = b"E"
 
 HEADER = struct.Struct(">cI")
 ROWS_COLUMNS = struct.Struct(">HH")
@@ -107,6 +113,7 @@ def view(path: str, input_fd: int = 0, output_fd: int = 1, take_input: bool = Tr
     taken = 0
     try:
         with _raw(input_fd, output_fd):
+            connection.sendall(frame(ENVIRONMENT, b"".join(b"%s=%s\0" % pair for pair in os.environb.items())))
             connection.sendall(_size_frame(output_fd))
             watched = [connection, woken, input_fd]
             while True:
