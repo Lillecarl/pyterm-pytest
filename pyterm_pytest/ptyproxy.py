@@ -77,6 +77,24 @@ _HELD = 4096
 Answer = Callable[[bytes], bytes | None]
 
 
+@contextlib.contextmanager
+def _one_error():
+    """
+    Raise the one error of a task group as itself.
+
+    A task group wraps what the block of `with` raised in an exception
+    group, so a caller's `except RuntimeError` would miss the error its
+    own block raised: every picture driver catches that to put its logs
+    beside the reason.
+    """
+    try:
+        yield
+    except BaseExceptionGroup as group:
+        if len(group.exceptions) == 1:
+            raise group.exceptions[0] from None
+        raise
+
+
 def answers_from(table: Mapping[bytes, bytes]) -> Answer:
     "An answer read out of a table of query and answer bytes."
     return lambda query: table.get(query)
@@ -226,10 +244,11 @@ class Proxy:
         proxy = cls(path)
         listener = await anyio.create_unix_listener(path)
         try:
-            async with anyio.create_task_group() as group:
-                group.start_soon(listener.serve, proxy._attend, group)
-                yield proxy
-                group.cancel_scope.cancel()
+            with _one_error():
+                async with anyio.create_task_group() as group:
+                    group.start_soon(listener.serve, proxy._attend, group)
+                    yield proxy
+                    group.cancel_scope.cancel()
         finally:
             await listener.aclose()
             with contextlib.suppress(FileNotFoundError):
@@ -382,10 +401,11 @@ class Proxy:
         backend.add_input_ready_callback(application._read)
         self.running = application
         try:
-            async with anyio.create_task_group() as group:
-                await backend.start(group)
-                yield application
-                group.cancel_scope.cancel()
+            with _one_error():
+                async with anyio.create_task_group() as group:
+                    await backend.start(group)
+                    yield application
+                    group.cancel_scope.cancel()
         finally:
             self.running = None
             backend.close()
