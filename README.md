@@ -8,7 +8,10 @@ of them need the same thing:
 * **Seats** -- a real terminal on a display server of its own: Xvfb for
   xterm, a kiosk compositor for foot and kitty, and how to photograph
   either. It moves here from `pymux/tests/take_picture.py`.
-  Lillecarl/pymux#276.
+  Lillecarl/pymux#276. A seat starts each terminal once per run, with
+  the `ptyproxy` viewer in it, and runs each command through the
+  proxy. Between commands it resets the terminal and checks the
+  picture against the terminal's first blank one. Lillecarl/pymux#591.
 * **Drivers** -- run a program on a pty, press keys at it, and fence
   the moment its work is done. Built on `ptyhost`, never around it.
   Lillecarl/pymux#275. `ptyproxy` is the first: the test runs the

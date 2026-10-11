@@ -4,7 +4,7 @@ The seats: a display server of its own, and how to take a picture on it.
 Moved here out of `pymux/tests/take_picture.py`, so that every
 suite that photographs a real terminal borrows the same two. An
 `XSeat` runs one Xvfb per run and finds windows with xdotool; a
-`WaylandSeat` runs one headless `sway` per picture, with a client
+`WaylandSeat` runs one headless `sway` per terminal, with a client
 of ours holding a virtual keyboard on the seat, and takes the output
 with `grim`. The settle loop asks the pixels and the tree that draws
 them, never the clock; the fixed waits that are left are the ones
@@ -13,6 +13,7 @@ narrows them further.
 """
 
 import base64
+import contextlib
 import os
 import re
 import shlex
@@ -22,9 +23,13 @@ import struct
 import subprocess
 import sys
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
+import anyio.from_thread
 from PIL import Image, ImageChops
+
+from .ptyproxy import RESET, Proxy
 
 
 #: The screen of the X server. It only has to be larger than the
@@ -69,6 +74,15 @@ BLINK_GAP = 0.25
 #: `_settle` cannot be used for one: a screen with a blinking cursor on
 #: it never settles, and that is the whole point of the measurement.
 BLINK_START = 2.0
+
+#: The cursor off, and on. RIS shows it, and a cursor that blinks makes
+#: two pictures of one blank screen differ, so a reset is checked with
+#: the cursor off and handed on with it on, as a new terminal has it.
+HIDE = b"\x1b[?25l"
+SHOW = b"\x1b[?25h"
+
+#: What a terminal runs to show what a seat's runs write.
+VIEWER = [sys.executable, "-m", "pyterm_pytest.ptyproxy_view"]
 
 #: What a suite exits with to say "this is not my answer".
 #:
@@ -220,6 +234,34 @@ def how_busy(roots):
     return runnable, ticks
 
 
+@dataclass
+class Shown:
+    """
+    A terminal a seat keeps for the whole run, running the ptyproxy
+    viewer. Each command is an application of its proxy, and a reset
+    between two of them stands in for a new terminal.
+    """
+
+    log: Path
+    #: Writes a picture of the terminal to the path it is given.
+    take: object
+    #: The processes whose tree draws it, as `Seat._roots` holds them.
+    roots: list
+    #: The terminal's exit code once it has ended, and `None` before.
+    gone: object
+    #: The output a Wayland seat takes, and the compositor that holds it.
+    room: Path | None = None
+    display: str | None = None
+    compositor: object = None
+    name: str = ""
+    key: tuple = ()
+    proxy: Proxy | None = None
+    stack: contextlib.ExitStack = field(default_factory=contextlib.ExitStack)
+    #: The picture of the terminal just after its first reset.
+    blank: Path | None = None
+    resets: int = 0
+
+
 class Seat:
     """
     A display server, and how to take a picture of a terminal on it.
@@ -230,10 +272,19 @@ class Seat:
     opens a window on it. So a picture is of one window among several,
     and the seat has to find the right one.
 
-    The Wayland seat runs a compositor for each picture, and that
+    The Wayland seat runs a compositor for each terminal, and that
     compositor gives its one window the whole output. So a picture is
     of the output, and there is nothing to find. That is the shape the
     harness wants, and it is what a kiosk compositor is for.
+
+    **A terminal starts once per run, not once per picture.** It runs
+    the ptyproxy viewer, each command runs as the application of that
+    viewer's proxy, and a reset between two commands stands in for a
+    new terminal. A start cost 3.4 to 8 seconds, two per fixture, and
+    was most of the time a picture check took. The reset is checked:
+    the terminal after it has to look as it did after its first one,
+    or the seat lets it go and the next command starts a new one.
+    Lillecarl/pymux#591.
     """
 
     name = ""
@@ -242,6 +293,13 @@ class Seat:
     #: the terminal in it, and its own display server beside it where
     #: that is what the picture is read out of. `how_busy` walks it.
     _roots = ()
+
+    def __init__(self):
+        self._shown = {}
+        self._current = None
+        self._opened = 0
+        self._portal = None
+        self._kept = contextlib.ExitStack()
 
     def how_busy(self):
         "How much of the tree that draws this picture is still working."
@@ -252,7 +310,163 @@ class Seat:
         return self
 
     def stop(self):
-        "Close it."
+        "Close every terminal it kept, and say how often each was reset."
+        for shown in list(self._shown.values()):
+            print("%s showed %d runs, and each reset clean" % (shown.name, shown.resets - 1), flush=True)
+            shown.stack.close()
+        self._shown.clear()
+        self._kept.close()
+
+    def _open(self, terminal, command, work, log, stack):
+        "Start `terminal` running `command`, and give back what shows it."
+        raise NotImplementedError
+
+    def _using(self, shown, application=None):
+        "Point what reads the seat -- `how_busy`, the clipboard -- at `shown`."
+        self._current = shown
+        self._roots = () if shown is None else shown.roots + ([application] if application else [])
+
+    def _keep(self, terminal, work):
+        "The kept terminal of this kind, started when there is none."
+        key = (tuple(terminal.argv(shlex.join(VIEWER))), tuple(sorted(terminal.environment.items())))
+        shown = self._shown.get(key)
+        if shown is not None:
+            if shown.gone() is None:
+                return shown
+            self._let_go(shown, "it ended with %s" % (shown.gone(),))
+
+        if self._portal is None:
+            self._portal = self._kept.enter_context(anyio.from_thread.start_blocking_portal())
+        self._opened += 1
+        name = "%s-%d" % (terminal.name, self._opened)
+        stack = contextlib.ExitStack()
+        try:
+            proxy = stack.enter_context(
+                self._portal.wrap_async_context_manager(Proxy.serving(Path(work) / ("%s.sock" % name)))
+            )
+            command = shlex.join([*VIEWER, str(proxy.path)])
+            shown = self._open(terminal, command, work, Path(work) / ("%s.log" % name), stack)
+            shown.name, shown.key, shown.proxy, shown.stack = name, key, proxy, stack
+            try:
+                self._portal.call(
+                    proxy.until,
+                    lambda: bool(proxy.viewers) and proxy.viewers[0].size is not None,
+                    "the viewer never reached the proxy",
+                    APPEAR_TIMEOUT,
+                )
+            except TimeoutError as reason:
+                raise RuntimeError("%s of %s\n%s" % (reason, name, _tail(shown.log))) from None
+            self._reset(shown, work)
+        except BaseException:
+            stack.close()
+            raise
+        self._shown[key] = shown
+        return shown
+
+    def _let_go(self, shown, why):
+        "Close a kept terminal, so the next command starts a new one."
+        print("%s let go after %d runs: %s" % (shown.name, shown.resets, str(why).splitlines()[0]), flush=True)
+        self._shown.pop(shown.key, None)
+        shown.stack.close()
+
+    def _reset(self, shown, work):
+        """
+        Put a kept terminal back as it started, and prove it.
+
+        RIS and the scrollback, the cursor off, and an OSC 52 behind
+        them: the fence, as for a fixture. It is written until it is
+        taken, because a terminal refuses it until it has the focus.
+
+        The first picture after the fence is the terminal's blank, taken
+        when the screen settles. After every later reset, the terminal
+        has to show that blank again, to the pixel and in size, before
+        `SETTLE_TIMEOUT`. One equal picture is enough, because the fence
+        came after the reset. RIS reaches what a picture shows and not
+        every setting a terminal holds, so the picture is the evidence,
+        not the escape.
+        """
+        token = os.urandom(8).hex()
+        fence = b"\x1b]52;c;%s\x07" % base64.b64encode(token.encode())
+        self._portal.call(shown.proxy.inject, RESET + HIDE)
+        what = "the reset of %s" % (shown.name,)
+        shown.resets += 1
+        path = Path(work) / ("%s-reset-%d.png" % (shown.name, shown.resets))
+        self._using(shown)
+        try:
+            wait_for_the_clipboard(
+                self.clipboard,
+                token,
+                shown.gone,
+                what,
+                shown.log,
+                again=lambda: self._portal.call(shown.proxy.inject, fence),
+            )
+            if shown.blank is None:
+                _settle(work, path, shown.take, shown.gone, what, shown.log, how_busy=self.how_busy)
+                shown.blank = path
+            else:
+                self._until_blank(shown, path, what)
+        finally:
+            self._using(None)
+        self._portal.call(shown.proxy.inject, SHOW)
+
+    @staticmethod
+    def _until_blank(shown, path, what):
+        "Take pictures until one is the terminal's blank."
+        deadline = time.time() + SETTLE_TIMEOUT
+        while True:
+            shown.take(path)
+            blank, now = Image.open(shown.blank), Image.open(path)
+            if blank.size != now.size:
+                unlike = "is %dx%d and its blank %dx%d" % (*now.size, *blank.size)
+            else:
+                moved = differences(shown.blank, path, path.with_suffix(".difference.png"))
+                if not moved:
+                    path.unlink()
+                    return
+                unlike = "left %d pixels unlike its blank, in %s" % (moved, path)
+            if time.time() >= deadline:
+                raise RuntimeError("%s %s" % (what, unlike))
+            time.sleep(0.05)
+
+    def _in_a_terminal(self, terminal, command, work, log_path, body):
+        """
+        Run `command` in the kept terminal of this kind, and hand `body`
+        the terminal and `ended`.
+
+        The command runs with the environment the terminal gave its
+        viewer, so it sees the TERM and COLORTERM it would have seen as
+        the terminal's own program. Its run's log is the slice of the
+        terminal's log written while it ran.
+        """
+        shown = self._keep(terminal, work)
+        start = shown.log.stat().st_size if shown.log.exists() else 0
+        if log_path is not None:
+            Path(log_path).write_text("# %s, kept, from byte %d of %s\n" % (shown.name, start, shown.log))
+        application = self._portal.wrap_async_context_manager(
+            shown.proxy.application(["sh", "-c", command], as_the_terminal=True, wait=APPEAR_TIMEOUT)
+        )
+        try:
+            with application as running:
+                self._using(shown, running.backend.pid)
+
+                def ended():
+                    gone = shown.gone()
+                    if gone is not None:
+                        return gone
+                    return running.backend.returncode if running.ended.is_set() else None
+
+                return body(shown, ended)
+        finally:
+            self._using(None)
+            if log_path is not None and shown.log.exists():
+                with open(shown.log, "rb") as log, open(log_path, "ab") as into:
+                    log.seek(start)
+                    into.write(log.read())
+            try:
+                self._reset(shown, work)
+            except Exception as reason:
+                self._let_go(shown, reason)
 
     def keep_the_log(self, out):
         """
@@ -305,7 +519,9 @@ class Seat:
         screen of a program. Only the two ways of opening a terminal
         differ, and a seat holds one of those.
         """
-        raise NotImplementedError
+        return self._in_a_terminal(
+            terminal, command, work, log_path, lambda shown, ended: director(shown.take, ended)
+        )
 
     #: Whether this seat can read a fence. A fence is an OSC 52 in
     #: the clipboard of the outermost terminal, and the seat reads it
@@ -485,6 +701,7 @@ def wait_for_the_clipboard(
     log_path,
     timeout=APPEAR_TIMEOUT,
     work=None,
+    again=None,
 ):
     """
     Wait for the display server's clipboard to hold the token.
@@ -496,9 +713,14 @@ def wait_for_the_clipboard(
 
     With `work`, the program wrote its fence with `fence`, and this
     answers it: the token was taken, so stop writing it.
+
+    With `again`, this writes the fence itself, by calling it each time
+    the clipboard does not hold the token yet.
     """
     deadline = time.time() + timeout
     while token.encode() not in read_the_clipboard():
+        if again is not None:
+            again()
         gone = ended()
         if gone is not None:
             raise RuntimeError(
@@ -507,8 +729,8 @@ def wait_for_the_clipboard(
             )
         if time.time() >= deadline:
             raise RuntimeError(
-                "waited %gs for the fence, and the terminal never took it\n%s"
-                % (timeout, _tail(log_path))
+                "%s: waited %gs for the fence, and the terminal never took it\n%s"
+                % (what, timeout, _tail(log_path))
             )
         time.sleep(0.1)
 
@@ -830,6 +1052,7 @@ class XSeat(Seat):
     name = "x"
 
     def __init__(self):
+        super().__init__()
         self.number = None
         self._process = None
         self._log = None
@@ -860,9 +1083,9 @@ class XSeat(Seat):
         self._log = work / "xvfb.log"
         self._process = subprocess.Popen(
             # **`-noreset`, or the seat goes away between two pictures.**
-            # One server serves the whole run, and each picture is a
-            # terminal that starts and is killed. So the client count
-            # reaches zero between every pair of pictures, and an X
+            # One server serves the whole run, and a terminal the seat
+            # lets go is killed. So the client count can reach zero
+            # before the next terminal starts, and an X
             # server with no clients left resets: it closes the sockets
             # it listens on and opens them again. A terminal that starts
             # inside that window is refused, and says "Can't open
@@ -900,6 +1123,7 @@ class XSeat(Seat):
         shutil.copy(self._log, Path(out) / Path(self._log).name)
 
     def stop(self):
+        super().stop()
         if self._process is not None:
             self._process.terminate()
             try:
@@ -1039,13 +1263,13 @@ class XSeat(Seat):
 
     subject = "the window"
 
-    def running(self, terminal, command, work, log_path, director):
+    def _open(self, terminal, command, work, log, stack):
         already = self._windows(terminal.window_class)
 
-        log = open(log_path, "wb")
+        output = stack.enter_context(open(log, "wb"))
         process = subprocess.Popen(
             terminal.argv(command),
-            stdout=log,
+            stdout=output,
             stderr=subprocess.STDOUT,
             env={
                 **os.environ,
@@ -1053,21 +1277,17 @@ class XSeat(Seat):
                 "DISPLAY": self.number,
             },
         )
-        # The Xvfb beside the terminal, because `import` copies its
-        # framebuffer: one server serves the whole run, so it is a
-        # sibling of this terminal and not a child of it.
-        self._roots = [process.pid] + (
-            [self._process.pid] if self._process is not None else []
+        stack.callback(_end, process)
+        window = self._wait_for_a_new_window(terminal.window_class, already, process, log)
+        return Shown(
+            log=log,
+            take=lambda where: self._take(window, where),
+            # The Xvfb beside the terminal, because `import` copies its
+            # framebuffer: one server serves the whole run, so it is a
+            # sibling of this terminal and not a child of it.
+            roots=[process.pid] + ([self._process.pid] if self._process is not None else []),
+            gone=process.poll,
         )
-        try:
-            window = self._wait_for_a_new_window(
-                terminal.window_class, already, process, log_path
-            )
-            return director(lambda where: self._take(window, where), process.poll)
-        finally:
-            self._roots = ()
-            _end(process)
-            log.close()
 
 
 def kiosk_configuration(wrapper):
@@ -1081,7 +1301,7 @@ def kiosk_configuration(wrapper):
     number and gave it back. The X seat's own server is on the other
     side of that search, and the step aside is in the log of every run:
     "Failed to bind socket @/tmp/.X11-unix/X0: Address already in use".
-    foot and kitty speak Wayland and nothing else, and `_run` passes an
+    foot and kitty speak Wayland and nothing else, and `_open` passes an
     empty DISPLAY, so no terminal here could reach an X server.
     Lillecarl/pymux#432.
     """
@@ -1095,7 +1315,7 @@ def kiosk_configuration(wrapper):
 
 class WaylandSeat(Seat):
     """
-    A compositor, one for each picture, arranged to be a kiosk.
+    A compositor, one for each kept terminal, arranged to be a kiosk.
 
     `sway` manages windows, and a configuration of three lines makes
     it do what `cage` did: no borders, one output, and the terminal
@@ -1110,10 +1330,10 @@ class WaylandSeat(Seat):
     software renderer draws the same pixels on every machine, which is
     what a comparison of pictures needs.
 
-    Each picture gets a runtime directory of its own, so the socket
+    Each compositor gets a runtime directory of its own, so the socket
     that appears in it is its own. `sway` does not end when the
     application it runs ends, the way `cage` does, so the wrapper
-    script it execs records the terminal's exit code, and `ended`
+    script it execs records the terminal's exit code, and `gone`
     reads it: to the harness, whatever draws is still gone at the
     same moment.
     """
@@ -1122,17 +1342,23 @@ class WaylandSeat(Seat):
     reads_fence = True
 
     def __init__(self):
+        super().__init__()
         self._runs = 0
         self._where = None
-        #: The compositor of the picture being taken, while one is
-        #: being taken. `trouble` is what reads it.
+        #: The compositor of the terminal being drawn on, while one is.
+        #: `trouble` is what reads it.
         self._compositor = None
+
+    def _using(self, shown, application=None):
+        super()._using(shown, application)
+        self._where = None if shown is None else (shown.room, shown.display)
+        self._compositor = None if shown is None else shown.compositor
 
     def trouble(self) -> str:
         """
         Why this seat cannot be drawn on, or nothing when it can.
 
-        A compositor here serves one picture, so there is no long lived
+        A compositor here serves one terminal, so there is no long lived
         server to ask about -- the question is only ever about the one
         this seat is drawing with now, and between pictures there is
         none and nothing is wrong. Lillecarl/pymux#477.
@@ -1266,14 +1492,6 @@ class WaylandSeat(Seat):
             )
         return protocols
 
-    def running(self, terminal, command, work, log_path, director):
-        def body(room, display, ended):
-            return director(
-                lambda where: self._take(room, display, where), ended
-            )
-
-        return self._run(terminal, command, work, log_path, body)
-
     def burst_frames(self, terminal, command, work, path, log_path, frames):
         """
         `frames` pictures taken when the screen changes, not when the
@@ -1287,10 +1505,13 @@ class WaylandSeat(Seat):
         never blinks.
         """
 
-        def body(room, display, ended):
-            return self._frames_on_damage(room, display, path, frames)
-
-        return self._run(terminal, command, work, log_path, body)
+        return self._in_a_terminal(
+            terminal,
+            command,
+            work,
+            log_path,
+            lambda shown, ended: self._frames_on_damage(shown.room, shown.display, path, frames),
+        )
 
     def _frames_on_damage(self, room, display, path, frames):
         # Beside the pictures, not in the compositor's room: a run
@@ -1364,7 +1585,7 @@ class WaylandSeat(Seat):
             shots.append(shot)
         return shots
 
-    def _run(self, terminal, command, work, log_path, body):
+    def _open(self, terminal, command, work, log, stack):
         room = self._room(work)
         protocols = self._generated_protocols()
         wrapper = room / "run.sh"
@@ -1375,10 +1596,10 @@ class WaylandSeat(Seat):
         config = room / "sway.conf"
         config.write_text(kiosk_configuration(wrapper))
 
-        log = open(log_path, "wb")
+        output = stack.enter_context(open(log, "wb"))
         process = subprocess.Popen(
             ["sway", "-c", str(config)],
-            stdout=log,
+            stdout=output,
             stderr=subprocess.STDOUT,
             env={
                 **os.environ,
@@ -1395,45 +1616,43 @@ class WaylandSeat(Seat):
                 "DISPLAY": "",
             },
         )
-        # The compositor is the root of everything that draws here: the
-        # terminal runs under it, and `grim` reads the output it
-        # composited.
-        self._roots = [process.pid]
-        self._compositor = process
-        holder = None
-        try:
-            display = self._wait_for_the_socket(room, process, log_path)
-            self._where = (room, display)
-            holder = subprocess.Popen(
-                [sys.executable, str(Path(__file__).parent / "virtual_keyboard.py")],
-                stdout=(room / "holder.log").open("wb"),
-                stderr=subprocess.STDOUT,
-                env={
-                    **os.environ,
-                    "XDG_RUNTIME_DIR": str(room),
-                    "WAYLAND_DISPLAY": display,
-                    "PYTHONPATH": protocols,
-                },
-            )
-            self._wait_for_the_keyboard(room)
-            code = room / "the-code"
+        stack.callback(_end, process)
+        display = self._wait_for_the_socket(room, process, log)
+        holder = subprocess.Popen(
+            [sys.executable, str(Path(__file__).parent / "virtual_keyboard.py")],
+            stdout=stack.enter_context((room / "holder.log").open("wb")),
+            stderr=subprocess.STDOUT,
+            env={
+                **os.environ,
+                "XDG_RUNTIME_DIR": str(room),
+                "WAYLAND_DISPLAY": display,
+                "PYTHONPATH": protocols,
+            },
+        )
+        stack.callback(_end, holder)
+        self._wait_for_the_keyboard(room)
+        code = room / "the-code"
 
-            def ended():
-                gone = process.poll()
-                if gone is not None:
-                    return gone
-                if code.exists():
-                    return int(code.read_text() or 0)
-                return None
+        def gone():
+            ended = process.poll()
+            if ended is not None:
+                return ended
+            if code.exists():
+                return int(code.read_text() or 0)
+            return None
 
-            return body(room, display, ended)
-        finally:
-            self._roots = ()
-            self._compositor = None
-            if holder is not None:
-                _end(holder)
-            _end(process)
-            log.close()
+        return Shown(
+            log=log,
+            take=lambda where: self._take(room, display, where),
+            # The compositor is the root of everything that draws here:
+            # the terminal runs under it, and `grim` reads the output it
+            # composited.
+            roots=[process.pid],
+            gone=gone,
+            room=room,
+            display=display,
+            compositor=process,
+        )
 
 
 def _end(process):
