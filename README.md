@@ -1,8 +1,12 @@
+# pyterm-pytest
+
 > This repository is a copy. Work on pyterm-pytest happens in
 > [pyterm](https://github.com/Lillecarl/pyterm), which exports its `pyterm-pytest/`
 > directory here on every push. Send changes there, and issues to
 > [Lillecarl/pymux](https://github.com/Lillecarl/pymux/issues).
-> `nix build github:Lillecarl/pyterm-pytest` builds it from this repository alone.
+> The docs are at <https://lillecarl.github.io/pyterm-pytest/>.
+
+<!-- The lines above are pyterm's nix/shared/readme-head.md, written by sync-sources. -->
 
 The test equipment of the pyterm collection, shared by the repositories
 it serves.
@@ -13,8 +17,7 @@ of them need the same thing:
 
 * **Seats** -- a real terminal on a display server of its own: Xvfb for
   xterm, a kiosk compositor for foot and kitty, and how to photograph
-  either. It moves here from `pymux/tests/take_picture.py`.
-  Lillecarl/pymux#276. A seat starts each terminal once per run, with
+  either. Lillecarl/pymux#276. A seat starts each terminal once per run, with
   the `ptyproxy` viewer in it, and runs each command through the
   proxy. Between commands it resets the terminal and checks the
   picture against the terminal's first blank one. Lillecarl/pymux#591.
@@ -48,12 +51,35 @@ library alone, so a repository whose own floor is lower takes only the
 modules it can.
 
 Each repository's `nix/checks.nix` takes this package as an argument,
-the way `pymux/nix/checks.nix` takes `ptterm` today, and its suite
-runs with the package in `pythonWithTests`, where `pytest` and
-`hypothesis` already are. The nixpkgs precedents are `dejagnu`, which
-is test equipment depending on the `expect` it drives with, and
-`pytest-xvfb`, which is the X seat as a pytest fixture.
+the way `pymux/nix/checks.nix` takes `ptterm`, and its suite runs with
+the package in its test environment, beside `pytest`. The nixpkgs
+precedents are `dejagnu`, which is test equipment depending on the
+`expect` it drives with, and `pytest-xvfb`, which is the X seat as a
+pytest fixture.
+
+<!-- The lines below are pyterm's nix/shared/readme-tail.md, written by sync-sources. -->
 
 ## Building
 
-    nix build --file . checks.pyterm-pytest-unit
+    nix build github:Lillecarl/pyterm-pytest    # from this repository alone
+    nix build --file . pyterm-pytest            # in a checkout of pyterm
+
+The suites that judge it run in pyterm, as `checks.pyterm-pytest-*`.
+
+## The collection
+
+pyterm-pytest is one source of [pyterm](https://github.com/Lillecarl/pyterm), and
+each source claims one job:
+
+| source | job |
+| --- | --- |
+| [pyte](https://lillecarl.github.io/pyte/) | parse, and hold a screen |
+| [ptyhost](https://lillecarl.github.io/ptyhost/) | run a program on a pty, and carry its bytes |
+| [ptterm](https://lillecarl.github.io/ptterm/) | draw one terminal, with prompt-toolkit |
+| [txterm](https://lillecarl.github.io/txterm/) | draw one terminal, with Textual |
+| [pymux](https://lillecarl.github.io/pymux/) | arrange several of them |
+| [pysmithay](https://lillecarl.github.io/pysmithay/) | a headless Wayland compositor, for a GUI program in a pane |
+| [pyterm-pytest](https://lillecarl.github.io/pyterm-pytest/) | the test equipment the suites share |
+
+[pyterm's site](https://lillecarl.github.io/pyterm/) holds every source's
+docs.
