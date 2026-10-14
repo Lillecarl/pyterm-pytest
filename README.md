@@ -1,3 +1,9 @@
+> This repository is a copy. Work on pyterm-pytest happens in
+> [pyterm](https://github.com/Lillecarl/pyterm), which exports its `pyterm-pytest/`
+> directory here on every push. Send changes there, and issues to
+> [Lillecarl/pymux](https://github.com/Lillecarl/pymux/issues).
+> `nix build github:Lillecarl/pyterm-pytest` builds it from this repository alone.
+
 The test equipment of the pyterm collection, shared by the repositories
 it serves.
 
