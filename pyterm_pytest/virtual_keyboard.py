@@ -17,10 +17,12 @@ compositor's picture.
 Lillecarl/pymux#281.
 """
 
-from protocols.wayland import WlSeat
+from __future__ import annotations
+
 from protocols.virtual_keyboard_unstable_v1.zwp_virtual_keyboard_manager_v1 import (
     ZwpVirtualKeyboardManagerV1,
 )
+from protocols.wayland import WlSeat
 from pywayland.client import Display
 
 seat = None
@@ -42,10 +44,7 @@ def main():
     registry.dispatcher["global"] = on_global
     display.roundtrip()
     if seat is None or manager is None:
-        raise RuntimeError(
-            "the compositor offers no %s"
-            % ("seat" if seat is None else "keyboard manager")
-        )
+        raise RuntimeError("the compositor offers no %s" % ("seat" if seat is None else "keyboard manager"))
     keyboard = manager.create_virtual_keyboard(seat)
     display.roundtrip()
     print("keyboard %s is on the seat" % (keyboard,), flush=True)

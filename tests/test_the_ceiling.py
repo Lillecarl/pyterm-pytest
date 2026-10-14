@@ -8,6 +8,8 @@ every run. `ptyhost` and `pyte` are the floor, and they are allowed:
 the rig sits between them and the layers it serves.
 """
 
+from __future__ import annotations
+
 import importlib
 import pkgutil
 import sys

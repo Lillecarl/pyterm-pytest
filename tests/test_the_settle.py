@@ -9,6 +9,8 @@ picture is kept only when both say the drawing has finished.
 Lillecarl/pymux#435.
 """
 
+from __future__ import annotations
+
 import pytest
 from PIL import Image
 

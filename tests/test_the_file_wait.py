@@ -2,6 +2,8 @@
 The wait for a file, which holds a settle off until the fence is there.
 """
 
+from __future__ import annotations
+
 import pytest
 
 from pyterm_pytest.seats import wait_for_the_file
@@ -19,9 +21,7 @@ def test_a_file_that_never_appears_is_a_fault(tmp_path):
     path = tmp_path / "fence"
 
     with pytest.raises(RuntimeError) as reason:
-        wait_for_the_file(
-            path, lambda: None, "the window", tmp_path / "log", timeout=0.1
-        )
+        wait_for_the_file(path, lambda: None, "the window", tmp_path / "log", timeout=0.1)
 
     assert str(path) in str(reason.value)
 

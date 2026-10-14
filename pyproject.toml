@@ -60,32 +60,281 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["pyterm_pytest"]
 
-[tool.ruff]
-target-version = "py314"
-select = [
-    "E",  # pycodestyle errors
-    "W",  # pycodestyle warnings
-    "F",  # pyflakes
-    "C",  # flake8-comprehensions
-    "T",  # Print.
-    "I",  # isort
-    "UP",  # pyupgrade
-    "RUF100",  # unused-noqa
-    "Q",  # quotes
-]
-ignore = [
-    "E501",  # Line too long, handled by black
-    "C901",  # Too complex
-    "E722",  # bare except.
-]
-
-
-[tool.ruff.per-file-ignores]
-
-
-[tool.ruff.isort]
-known-first-party = ["pyterm_pytest"]
-
 [tool.pytest.ini_options]
 # A coroutine test runs with no mark on it.
 anyio_mode = "auto"
+
+# Copied from pyterm's `ruff.toml` by `sync-sources`. Change it there.
+[tool.ruff]
+# pyterm: one style for annotations, in every source.
+#
+# Every file lazy (`from __future__ import annotations`), none quoted.
+# UP037 unquotes an annotation once the future import makes it lazy,
+# and stays silent without it, so the import is the switch and the
+# rule is the guard. The presence of the import is held per package
+# by its own gate (`checks.pymux-ruff` greps its tree).
+#
+# FA100 is absent on purpose: on target py311 it fires only where a
+# rewrite needs the import, and its fix is unsafe, so the editor
+# never applies it. TC001-TC003 are deferred: should a runtime
+# reader ever need a name, that name keeps a runtime import through
+# the `runtime-evaluated-*` exemptions, per symbol, and nothing about
+# laziness changes for the rest.
+#
+# Each source holds a copy of everything above `[lint.isort]` in its
+# own `pyproject.toml`: its lint sees only its own tree, and its
+# repository stands alone. `nix run --file . sync-sources` writes the
+# copies, and `checks.pyterm-sources-in-step` fails while one differs.
+target-version = "py314"
+# Pinned: a ruff upgrade must never silently reflow the tree.
+line-length = 120
+
+[tool.ruff.lint]
+# Every rule here autofixes cleanly through the editor pipeline, and
+# the gate below holds what the pipeline leaves behind. One family
+# per commit on the way in; nothing here arrived in bulk.
+#
+# UP037 unquotes an annotation once the future import makes it lazy.
+# I001 sorts the imports the pipeline already organizes. UP006,
+# UP007 and UP045 spell the modern syntax the floor already runs.
+# UP009, UP015, UP024 and UP033 are four trivial modernizations.
+# F401 drops the imports nothing reads. RUF100 drops the `noqa`
+# comments nothing needs. RUF023 sorts the slots. PIE790, PIE800
+# and PIE808 drop three kinds of dead weight.
+#
+# Strings: `%` stays where it is. New code prefers f-strings, and a
+# `%` a touch already rewrites may ride along, but there is no bulk
+# migration: UP031 has no autofix, and its thousand sites are a
+# manual, trap-laden rewrite (a tuple on the right of `%` formats
+# its elements, an f-string its repr). Measured on this machine the
+# difference is fourteen nanoseconds a format -- style, not speed,
+# decides. UP031 and UP032 stay off for the same reason.
+#
+# FA100 is absent: on this floor it fires only where a rewrite needs
+# the import, and its fix is unsafe, so the editor never applies it.
+# The presence of the import is held per package by its own gate.
+# TC001-TC003 are deferred: should a runtime reader ever need a
+# name, that name keeps a runtime import through the
+# `runtime-evaluated-*` exemptions, per symbol.
+#
+# The rest of UP, PIE, RUF, RET, ISC and FURB, plus B035, free: a
+# census under ALL at this floor found nothing for any of them, so
+# they hold the floor rather than change the tree. They ride
+# together in one commit; a family with hits gets its own commit on
+# the way in. UP027 and UP038 are absent on purpose: ruff 0.16
+# removed them, and naming a removed rule fails the run. Preview
+# rules are absent too: they move underfoot. RUF029 is the one to
+# watch graduate -- thirty-nine unused async tasks wait for it.
+#
+# UP035 moves the typing names to `collections.abc`.
+# RUF022 sorts `__all__`.
+# RET501, RET502, RET505 and RET506 flatten what follows return
+# and raise: no `else` after either, and no bare `return None`.
+# PT006 names parametrize cases with tuples, not strings.
+# RUF005 unpacks where concatenation builds.
+# SIM105 folds try-except-pass into `contextlib.suppress`.
+# SIM108 writes the short if-else as a ternary.
+# ISC004 parenthesizes the implicit concatenation.
+#
+# The small safe ones ride together, a hunk or two each: B009 and
+# B010 spell attribute access plainly, E713 writes `not in`, FURB105
+# drops the empty `print`, FURB110 writes the `or`, FURB167 names
+# the regex flag long, FURB188 cuts the prefix, ISC003 joins the
+# split string, PLR0402 writes the from-import, PLR2044 drops the
+# empty comment, PTH201 drops the current-directory spell, RSE102
+# drops the parens on a bare raise, UP032 writes f-strings for
+# `.format` (not `%`: UP031 stays off for the tuple trap), UP041
+# names `TimeoutError`, UP043 drops the default type args. RUF021
+# stays off: preview-only in this ruff, so its one pair of parens
+# rides without the rule.
+#
+# C408 writes the literal for the builtin call, E731 writes the
+# `def` for the lambda, B007 underscores the unused loop name (one
+# noqa where the index leaves the loop), RUF007 walks pairs with
+# `pairwise`, RUF015 takes the first with `next`, RUF036 moves
+# `None` to the end of the union.
+#
+# Later, by hand, one family per commit: RET503 and RET504 spell
+# the bare return out; F841 drops the dead stores (two `process`
+# reads need eyes first); RUF012 annotates the class constants or
+# promotes them; RUF006 holds the task refs; PERF401 writes the
+# comprehension; B006 loses the mutable default; B904 chains the
+# raise with `from`; N818 renames the test-local `Failed`s (the
+# public names keep theirs behind noqa); E501 rewraps four lines
+# and excuses one blob; E402 excuses three sys.path hacks; and
+# the singles -- B028, PGH003, TD004, PT022, ANN206, TRY004 (a
+# false positive: bad value, not bad type), TC004, PLR0124,
+# FURB192, ASYNC230 -- each fit in one line. UP030, EM102 and
+# EM103 already ride as side effects of UP032.
+#
+# Later still, or never: B905 adds `strict=` (it changes
+# behaviour, each site judges its invariant); PT011 wants
+# `match=`; PT018 splits the asserts (its fix still sits in
+# preview); TRY002 names the error; EM101 and TRY003 rewrite one
+# hundred fifty messages by taste.
+#
+# Not coming: S and T201 (tests assert and print), ANN and D (the
+# checker owns types, docstrings never took), FBT (public
+# signatures), the complexity caps and magic numbers, SLF001
+# (tests reach in on purpose), INP001, ARG (fixture side
+# effects), RUF059, A (builtin names), the PTH migration off
+# `os.path`, COM812 (the formatter owns commas), UP031 (the tuple
+# trap), PLC0415 (deferred imports), PLW0603 (lazy singletons),
+# BLE001 (teardown catches broad by design; SIM105 won), RUF001
+# (test data carries confusables on purpose), N (names carry
+# meaning), ASYNC110 (tests poll), ERA001 and FIX003 (comments
+# carry intent), TD001-TD003 (process), B008 (frozen value types
+# share defaults safely), PLW1641 (one design question, no guard
+# value).
+select = [
+    "B007",
+    "B009",
+    "B010",
+    "B035",
+    "C408",
+    "E713",
+    "E731",
+    "F401",
+    "FURB105",
+    "FURB110",
+    "FURB116",
+    "FURB122",
+    "FURB129",
+    "FURB132",
+    "FURB136",
+    "FURB157",
+    "FURB161",
+    "FURB162",
+    "FURB163",
+    "FURB164",
+    "FURB166",
+    "FURB167",
+    "FURB168",
+    "FURB169",
+    "FURB171",
+    "FURB177",
+    "FURB181",
+    "FURB187",
+    "FURB188",
+    "I001",
+    "ISC001",
+    "ISC002",
+    "ISC003",
+    "ISC004",
+    "PIE790",
+    "PIE794",
+    "PIE796",
+    "PIE800",
+    "PIE804",
+    "PIE807",
+    "PIE808",
+    "PLR0402",
+    "PLR2044",
+    "PT006",
+    "PTH201",
+    "RET501",
+    "RET502",
+    "RET505",
+    "RET506",
+    "RET507",
+    "RET508",
+    "RSE102",
+    "RUF002",
+    "RUF003",
+    "RUF005",
+    "RUF007",
+    "RUF008",
+    "RUF009",
+    "RUF010",
+    "RUF013",
+    "RUF015",
+    "RUF016",
+    "RUF017",
+    "RUF018",
+    "RUF019",
+    "RUF020",
+    "RUF022",
+    "RUF023",
+    "RUF024",
+    "RUF026",
+    "RUF028",
+    "RUF030",
+    "RUF032",
+    "RUF033",
+    "RUF034",
+    "RUF036",
+    "RUF037",
+    "RUF040",
+    "RUF041",
+    "RUF043",
+    "RUF046",
+    "RUF048",
+    "RUF049",
+    "RUF051",
+    "RUF053",
+    "RUF057",
+    "RUF058",
+    "RUF060",
+    "RUF061",
+    "RUF063",
+    "RUF064",
+    "RUF068",
+    "RUF100",
+    "RUF101",
+    "RUF102",
+    "RUF103",
+    "RUF104",
+    "RUF200",
+    "SIM105",
+    "SIM108",
+    "UP001",
+    "UP003",
+    "UP004",
+    "UP005",
+    "UP006",
+    "UP007",
+    "UP008",
+    "UP009",
+    "UP010",
+    "UP011",
+    "UP012",
+    "UP013",
+    "UP014",
+    "UP015",
+    "UP017",
+    "UP018",
+    "UP019",
+    "UP020",
+    "UP021",
+    "UP022",
+    "UP023",
+    "UP024",
+    "UP025",
+    "UP026",
+    "UP028",
+    "UP029",
+    "UP032",
+    "UP033",
+    "UP034",
+    "UP035",
+    "UP036",
+    "UP037",
+    "UP039",
+    "UP040",
+    "UP041",
+    "UP042",
+    "UP043",
+    "UP044",
+    "UP045",
+    "UP046",
+    "UP047",
+    "UP049",
+    "UP050",
+]
+
+[tool.ruff.lint.isort]
+# Named so the grouping never follows PYTHONPATH: measured on pymux,
+# an installed sibling sorts one way in the dev shell and the other
+# in the sandbox.
+known-first-party = ["pyterm_pytest"]
+known-third-party = ["ptyhost", "pyte"]

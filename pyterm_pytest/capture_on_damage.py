@@ -28,6 +28,8 @@ quiet for `QUIET` seconds: a cursor that never blinks is an answer,
 and this writes the frames it has and exits.
 """
 
+from __future__ import annotations
+
 import mmap
 import os
 import select
@@ -126,9 +128,7 @@ def on_ready(ignored_frame, hi, lo, nsec):
             start = row * stride
             writer.write(memory[start : start + width * 4])
     frames_written += 1
-    (directory / "meta").write_text(
-        "%d %d %d\n" % (width, height, 1 if y_inverted else 0)
-    )
+    (directory / "meta").write_text("%d %d %d\n" % (width, height, 1 if y_inverted else 0))
     frame.destroy()
     if frames_written < frames_wanted:
         frame = start_a_frame()

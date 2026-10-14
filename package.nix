@@ -23,6 +23,8 @@
   wlroots,
   wayland-scanner,
   coreutils,
+  # The linter and formatter that the `ruff` check runs.
+  ruff,
 }:
 let
   # The bindings the wayland seat's keyboard holder runs, generated
@@ -79,6 +81,8 @@ let
     fileset = lib.fileset.unions [
       ./tests
       ./pyproject.toml
+      # The `ruff` check reads the package beside the tests.
+      ./pyterm_pytest
     ];
   };
 
@@ -88,7 +92,7 @@ let
   testEnv = mkVirtualEnv "pyterm-pytest-test-env" { pyterm-pytest = [ "test" ]; };
 
   checks = callPackage ./nix/checks.nix {
-    inherit testEnv testSources waylandProtocols;
+    inherit testEnv testSources waylandProtocols ruff;
   };
 in
 package

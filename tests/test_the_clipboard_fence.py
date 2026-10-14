@@ -2,6 +2,8 @@
 The clipboard fence: the settle waits for the token the terminal took.
 """
 
+from __future__ import annotations
+
 import base64
 import re
 import subprocess
@@ -17,10 +19,7 @@ def test_a_token_that_is_there_costs_nothing():
     def read():
         return b"fence-Zm9v is in the clipboard"
 
-    assert (
-        wait_for_the_clipboard(read, "fence-Zm9v", lambda: None, "the window", None)
-        == 0.0
-    )
+    assert wait_for_the_clipboard(read, "fence-Zm9v", lambda: None, "the window", None) == 0.0
 
 
 def test_a_fence_that_never_comes_is_a_fault(tmp_path):
@@ -30,9 +29,7 @@ def test_a_fence_that_never_comes_is_a_fault(tmp_path):
         return b""
 
     with pytest.raises(RuntimeError) as reason:
-        wait_for_the_clipboard(
-            read, "fence-Zm9v", lambda: None, "the window", tmp_path / "log", timeout=0.1
-        )
+        wait_for_the_clipboard(read, "fence-Zm9v", lambda: None, "the window", tmp_path / "log", timeout=0.1)
 
     assert "never took" in str(reason.value)
 
@@ -57,8 +54,7 @@ def _program(tmp_path, lines):
     def read():
         # The terminal decodes the escape; this reads the escape itself.
         return b"".join(
-            base64.b64decode(one)
-            for one in re.findall(rb"\x1b]52;c;([A-Za-z0-9+/=]*)\x07", written.read_bytes())
+            base64.b64decode(one) for one in re.findall(rb"\x1b]52;c;([A-Za-z0-9+/=]*)\x07", written.read_bytes())
         )
 
     return process, read

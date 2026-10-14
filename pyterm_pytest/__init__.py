@@ -9,3 +9,5 @@ the layers this package serves, and a rig that imported one could no
 longer be an input to its checks. `pyterm_pytest.tests.test_the_ceiling`
 holds that rule where a change would trip it.
 """
+
+from __future__ import annotations

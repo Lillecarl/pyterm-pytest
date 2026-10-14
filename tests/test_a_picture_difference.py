@@ -10,6 +10,8 @@ all the ink and not what moved (Lillecarl/pymux#370).
 Each fault has a test here that fails on the old answer.
 """
 
+from __future__ import annotations
+
 import pytest
 from PIL import Image
 
@@ -63,9 +65,7 @@ def test_the_box_holds_what_moved_and_not_what_is_drawn(tmp_path):
     """
     ink = [((1, 1, 12, 4), (255, 255, 255))]
     one = picture(tmp_path / "one.png", marks=ink)
-    two = picture(
-        tmp_path / "two.png", marks=ink + [((17, 8, 2, 2), (255, 0, 0))]
-    )
+    two = picture(tmp_path / "two.png", marks=[*ink, ((17, 8, 2, 2), (255, 0, 0))])
 
     count, box = changed_region(one, two, tmp_path / "diff.png")
     assert count == 4
@@ -83,9 +83,7 @@ def test_two_pictures_of_different_sizes_are_compared_where_they_meet(tmp_path):
 
     assert differences(one, two) == 0
 
-    two = picture(
-        tmp_path / "two.png", size=(20, 10), marks=[((3, 3, 2, 2), (0, 255, 0))]
-    )
+    two = picture(tmp_path / "two.png", size=(20, 10), marks=[((3, 3, 2, 2), (0, 255, 0))])
     assert differences(one, two) == 4
 
 
@@ -115,9 +113,7 @@ DRAWING = [((0, 0, 2, 2), (255, 0, 0)), ((2, 0, 2, 2), (0, 204, 51))]
 
 def test_one_drawing_in_two_places_is_the_same_drawing(tmp_path):
     "Where a terminal put it is not a difference. Lillecarl/pymux#262."
-    moved = [
-        ((box[0] + 7, box[1] + 3, box[2], box[3]), colour) for box, colour in DRAWING
-    ]
+    moved = [((box[0] + 7, box[1] + 3, box[2], box[3]), colour) for box, colour in DRAWING]
     one = picture(tmp_path / "one.png", size=(20, 10), marks=DRAWING)
     two = picture(tmp_path / "two.png", size=(30, 14), marks=moved)
 
@@ -132,7 +128,7 @@ def test_a_drawing_that_differs_is_counted_where_it_differs(tmp_path):
     two = picture(
         tmp_path / "two.png",
         size=(20, 10),
-        marks=DRAWING + [((3, 1, 1, 1), (255, 204, 0))],
+        marks=[*DRAWING, ((3, 1, 1, 1), (255, 204, 0))],
     )
 
     count, _first, _second = the_same_drawing(one, two)
@@ -145,9 +141,7 @@ def test_two_drawings_of_different_sizes_are_not_compared(tmp_path):
     has moved, or a font has, and somebody has to look.
     """
     one = picture(tmp_path / "one.png", size=(20, 10), marks=DRAWING)
-    two = picture(
-        tmp_path / "two.png", size=(20, 10), marks=[((0, 0, 4, 3), (255, 0, 0))]
-    )
+    two = picture(tmp_path / "two.png", size=(20, 10), marks=[((0, 0, 4, 3), (255, 0, 0))])
 
     with pytest.raises(NothingToCompare) as raised:
         the_same_drawing(one, two)

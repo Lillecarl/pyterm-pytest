@@ -5,6 +5,8 @@ pyte screen on its near one, and a picture is that screen as pixels.
 Lillecarl/pymux#591.
 """
 
+from __future__ import annotations
+
 import base64
 import os
 import re
@@ -240,7 +242,12 @@ def test_a_directors_error_comes_out_as_itself(seat, tmp_path, apart):
 
     with pytest.raises(RuntimeError, match="the director's own"):
         seat().twins(
-            Terminal(), lambda viewer: "exec " + viewer, "sleep 30", tmp_path, (tmp_path / "b", tmp_path / "t"), director,
+            Terminal(),
+            lambda viewer: "exec " + viewer,
+            "sleep 30",
+            tmp_path,
+            (tmp_path / "b", tmp_path / "t"),
+            director,
             apart=apart,
         )
 
@@ -288,4 +295,3 @@ def test_a_named_command_runs_under_that_name(tmp_path):
 def test_the_proxy_answers_for_both_twins(seat, tmp_path):
     twins_of(seat(), asked(tmp_path), tmp_path, answers_from({b"\x1b[c": b"\x1b[?62c"}))
     assert (tmp_path / "answered-").read_bytes() == b"\x1b[?62c"
-

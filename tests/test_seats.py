@@ -2,6 +2,8 @@
 The seats' own promises, apart from the waits they run.
 """
 
+from __future__ import annotations
+
 import os
 import socket
 import struct
@@ -181,15 +183,11 @@ SERVED = struct.pack("<BxHHH", 1, 11, 0, 0)
 def refusal(reason):
     "What a server sends a client it will not serve, and why."
     padded = reason + b"\0" * (-len(reason) % 4)
-    return (
-        struct.pack("<BBHHH", 0, len(reason), 11, 0, len(padded) // 4) + padded
-    )
+    return struct.pack("<BBHHH", 0, len(reason), 11, 0, len(padded) // 4) + padded
 
 
 def test_a_display_nothing_answers_says_so():
-    assert "nothing answers display" in why_the_display_refuses(
-        ":%d" % _a_display_nobody_serves()
-    )
+    assert "nothing answers display" in why_the_display_refuses(":%d" % _a_display_nobody_serves())
 
 
 def test_a_display_that_serves_a_client_is_no_trouble():
@@ -207,9 +205,7 @@ def test_a_display_that_refuses_gives_the_reason_the_server_gave():
     nothing else in a run holds them. "Maximum number of clients
     reached" is one of them. Lillecarl/pymux#431.
     """
-    number, door = a_server_that_answers(
-        refusal(b"Maximum number of clients reached")
-    )
+    number, door = a_server_that_answers(refusal(b"Maximum number of clients reached"))
     try:
         said = why_the_display_refuses(number)
     finally:
@@ -378,9 +374,7 @@ class _NothingAnswers:
         if argv[0] == "import":
             raise subprocess.TimeoutExpired(argv, PICTURE_TIMEOUT)
         assert argv[0] == "xdotool", argv
-        return subprocess.CompletedProcess(
-            argv, 0 if self.window_is_there else 1, b"", b""
-        )
+        return subprocess.CompletedProcess(argv, 0 if self.window_is_there else 1, b"", b"")
 
 
 def _a_seat_on_a_display_that_serves(tmp_path):
@@ -411,9 +405,7 @@ def test_a_picture_that_never_came_says_the_window_has_gone(monkeypatch, tmp_pat
     assert "has gone" in said
 
 
-def test_a_picture_that_never_came_says_so_when_the_window_stayed(
-    monkeypatch, tmp_path
-):
+def test_a_picture_that_never_came_says_so_when_the_window_stayed(monkeypatch, tmp_path):
     "A window that is still there is a different fault, and says so."
     seat, door = _a_seat_on_a_display_that_serves(tmp_path)
     monkeypatch.setattr(the_seats.subprocess, "run", _NothingAnswers(True))
@@ -474,9 +466,7 @@ class _AGrimThatHangs:
         raise subprocess.TimeoutExpired(argv, PICTURE_TIMEOUT)
 
 
-def test_a_picture_of_an_output_that_never_came_is_a_runtime_error(
-    monkeypatch, tmp_path
-):
+def test_a_picture_of_an_output_that_never_came_is_a_runtime_error(monkeypatch, tmp_path):
     seat = WaylandSeat()
     seat._compositor = _Running()
     monkeypatch.setattr(the_seats.subprocess, "run", _AGrimThatHangs())

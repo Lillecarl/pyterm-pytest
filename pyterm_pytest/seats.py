@@ -12,6 +12,8 @@ neither question can answer, and Lillecarl/pymux#276 is the pass that
 narrows them further.
 """
 
+from __future__ import annotations
+
 import base64
 import contextlib
 import os
@@ -30,7 +32,6 @@ import anyio.from_thread
 from PIL import Image, ImageChops
 
 from .ptyproxy import RESET, Proxy, answers_from
-
 
 #: The screen of the X server. It only has to be larger than the
 #: window; nothing is placed against its edges.
@@ -134,9 +135,7 @@ def open_the_seats(terminals, work):
         except Exception as reason:
             for seat in seats.values():
                 seat.stop()
-            raise TheSeatIsGone(
-                "the %s seat would not start: %s" % (terminal.seat, reason)
-            ) from reason
+            raise TheSeatIsGone("the %s seat would not start: %s" % (terminal.seat, reason)) from reason
     return seats
 
 
@@ -148,7 +147,7 @@ def with_no_answer(reason):
     derivation on it, so nix keeps nothing and the next build tries
     again. Lillecarl/pymux#216.
     """
-    print("")
+    print()
     print("This run has no answer. %s" % (reason,), flush=True)
     print("Nothing is kept, so the next build runs it again.", flush=True)
     return COULD_NOT_RUN
@@ -532,9 +531,7 @@ class Seat:
         screen of a program. Only the two ways of opening a terminal
         differ, and a seat holds one of those.
         """
-        return self._in_a_terminal(
-            terminal, command, work, log_path, lambda shown, ended: director(shown.take, ended)
-        )
+        return self._in_a_terminal(terminal, command, work, log_path, lambda shown, ended: director(shown.take, ended))
 
     def twins(
         self,
@@ -606,7 +603,9 @@ class Seat:
                     viewer = named_command(viewer, named, Path(work) / ("%s-%s.sh" % (served.stem, role)))
                 ran.append(
                     stack.enter_context(
-                        self._run(terminal, "exec " + viewer if role == "bare" else through(viewer), work, log_path, role)
+                        self._run(
+                            terminal, "exec " + viewer if role == "bare" else through(viewer), work, log_path, role
+                        )
                     )
                 )
                 attached = sockets[: len(ran)].count(served)
@@ -769,9 +768,7 @@ class Seat:
         at those moments, and a blink longer than the burst reads as no
         blink at all. A seat that hears damage measures instead.
         """
-        return self.picture_of(
-            terminal, command, work, path, log_path, frames=frames
-        )
+        return self.picture_of(terminal, command, work, path, log_path, frames=frames)
 
     #: How a message names what this seat photographs. The X seat takes
     #: a picture of one window among several; the Wayland seat takes the
@@ -962,15 +959,9 @@ def wait_for_the_file(path, ended, what, log_path, timeout=APPEAR_TIMEOUT):
     while not path.exists():
         gone = ended()
         if gone is not None:
-            raise RuntimeError(
-                "%s ended before %s appeared (exit %s)\n%s"
-                % (what, path, gone, _tail(log_path))
-            )
+            raise RuntimeError("%s ended before %s appeared (exit %s)\n%s" % (what, path, gone, _tail(log_path)))
         if time.time() >= deadline:
-            raise RuntimeError(
-                "waited %gs for %s, and it never came\n%s"
-                % (timeout, path, _tail(log_path))
-            )
+            raise RuntimeError("waited %gs for %s, and it never came\n%s" % (timeout, path, _tail(log_path)))
         # A fence waits here twice per run, so the poll is most of what
         # a fence costs.
         time.sleep(0.05)
@@ -1001,9 +992,10 @@ def fence(work, token):
     """
     taken, stopped = _fence_files(work, token)
     payload = base64.b64encode(token.encode()).decode()
-    return (
-        "until [ -e %s ]; do printf '\\033]52;c;%s\\007'; sleep 0.05; done\n"
-        "touch %s\n" % (shlex.quote(str(taken)), payload, shlex.quote(str(stopped)))
+    return "until [ -e %s ]; do printf '\\033]52;c;%s\\007'; sleep 0.05; done\ntouch %s\n" % (
+        shlex.quote(str(taken)),
+        payload,
+        shlex.quote(str(stopped)),
     )
 
 
@@ -1041,10 +1033,7 @@ def wait_for_the_clipboard(
             again()
         gone = ended()
         if gone is not None:
-            raise RuntimeError(
-                "%s ended before the fence came (exit %s)\n%s"
-                % (what, gone, _tail(log_path))
-            )
+            raise RuntimeError("%s ended before the fence came (exit %s)\n%s" % (what, gone, _tail(log_path)))
         if time.time() >= deadline:
             raise RuntimeError(
                 "%s: waited %gs for the fence %s, and the terminal never took it; the clipboard holds %r\n%s"
@@ -1143,10 +1132,7 @@ def _settle(
         time.sleep(0.4)
         gone = ended()
         if gone is not None:
-            raise RuntimeError(
-                "%s ended while it was drawing (exit %s)\n%s"
-                % (what, gone, _tail(log_path))
-            )
+            raise RuntimeError("%s ended while it was drawing (exit %s)\n%s" % (what, gone, _tail(log_path)))
         before, busy = busy, how_busy() if how_busy is not None else None
         take_one(path)
         count, box = changed_region(previous, path, difference)
@@ -1183,13 +1169,8 @@ def _settle(
     if box:
         why.append("%dx%d at %d,%d kept changing" % (box[2], box[3], box[0], box[1]))
     if not quiet:
-        why.append(
-            "the tree that draws it never went idle (%d tasks runnable)" % (busy[0],)
-        )
-    raise RuntimeError(
-        "%s never settled: %s\n%s"
-        % (what, ", and ".join(why) or "nothing to compare", _tail(log_path))
-    )
+        why.append("the tree that draws it never went idle (%d tasks runnable)" % (busy[0],))
+    raise RuntimeError("%s never settled: %s\n%s" % (what, ", and ".join(why) or "nothing to compare", _tail(log_path)))
 
 
 def _watch_the_tree(log_path):
@@ -1261,10 +1242,7 @@ def _burst(path, take_one, ended, what, log_path):
             time.sleep(BLINK_GAP)
         gone = ended()
         if gone is not None:
-            raise RuntimeError(
-                "%s ended while it was drawing (exit %s)\n%s"
-                % (what, gone, _tail(log_path))
-            )
+            raise RuntimeError("%s ended while it was drawing (exit %s)\n%s" % (what, gone, _tail(log_path)))
         shot = path.with_name("%s.%d.png" % (path.stem, number))
         take_one(shot)
         shots.append(shot)
@@ -1497,8 +1475,7 @@ class XSeat(Seat):
         said = Path(log_path).read_bytes() if Path(log_path).exists() else b""
         if THE_DISPLAY_WOULD_NOT_OPEN.search(said):
             raise TheSeatIsGone(
-                "the terminal of the %s seat never reached display %s\n%s"
-                % (self.name, self.number, _tail(log_path))
+                "the terminal of the %s seat never reached display %s\n%s" % (self.name, self.number, _tail(log_path))
             )
 
     def _wait_for_the_window(self, window_class, process, log_path):
@@ -1508,8 +1485,7 @@ class XSeat(Seat):
             if process.poll() is not None:
                 self._the_terminal_never_got_in(log_path)
                 raise RuntimeError(
-                    "the terminal ended before it drew anything (exit %s)\n%s"
-                    % (process.returncode, _tail(log_path))
+                    "the terminal ended before it drew anything (exit %s)\n%s" % (process.returncode, _tail(log_path))
                 )
             found = self._windows(window_class)
             if found:
@@ -1555,9 +1531,7 @@ class XSeat(Seat):
             % (
                 window,
                 PICTURE_TIMEOUT,
-                "is still there"
-                if self._still_on_the_display(window)
-                else "has gone",
+                "is still there" if self._still_on_the_display(window) else "has gone",
                 " ".join("%.1f" % one for one in os.getloadavg()),
             )
         )
@@ -1643,11 +1617,8 @@ def kiosk_configuration(wrapper):
     empty DISPLAY, so no terminal here could reach an X server.
     Lillecarl/pymux#432.
     """
-    return (
-        "default_border none\n"
-        "xwayland disable\n"
-        "output HEADLESS-1 resolution 1024x768\n"
-        "exec /bin/sh %s\n" % (wrapper,)
+    return "default_border none\nxwayland disable\noutput HEADLESS-1 resolution 1024x768\nexec /bin/sh %s\n" % (
+        wrapper,
     )
 
 
@@ -1721,17 +1692,14 @@ class WaylandSeat(Seat):
         while time.time() < deadline:
             if process.poll() is not None:
                 raise RuntimeError(
-                    "the compositor ended before it drew anything "
-                    "(exit %s)\n%s" % (process.returncode, _tail(log_path))
+                    "the compositor ended before it drew anything (exit %s)\n%s" % (process.returncode, _tail(log_path))
                 )
             sockets = sorted(room.glob("wayland-*"))
             sockets = [s for s in sockets if not s.name.endswith(".lock")]
             if sockets:
                 return sockets[0].name
             time.sleep(0.2)
-        raise RuntimeError(
-            "the compositor never opened a display\n%s" % _tail(log_path)
-        )
+        raise RuntimeError("the compositor never opened a display\n%s" % _tail(log_path))
 
     def _take(self, room, display, path):
         try:
@@ -1769,9 +1737,7 @@ class WaylandSeat(Seat):
             % (
                 PICTURE_TIMEOUT,
                 "is still running" if self.trouble() == "" else "has ended",
-                "is still in the room"
-                if (Path(room) / display).exists()
-                else "has gone from the room",
+                "is still in the room" if (Path(room) / display).exists() else "has gone from the room",
                 " ".join("%.1f" % one for one in os.getloadavg()),
             )
         )
@@ -1815,9 +1781,7 @@ class WaylandSeat(Seat):
             if log.exists() and "keyboard" in log.read_text():
                 return
             time.sleep(0.2)
-        raise RuntimeError(
-            "the keyboard never reached the seat\n%s" % _tail(log)
-        )
+        raise RuntimeError("the keyboard never reached the seat\n%s" % _tail(log))
 
     @staticmethod
     def _generated_protocols():
@@ -1825,8 +1789,7 @@ class WaylandSeat(Seat):
         protocols = os.environ.get("PYTERM_WAYLAND_PROTOCOLS")
         if protocols is None:
             raise RuntimeError(
-                "PYTERM_WAYLAND_PROTOCOLS is not set: the wayland seat's "
-                "clients have no generated bindings to run with"
+                "PYTERM_WAYLAND_PROTOCOLS is not set: the wayland seat's clients have no generated bindings to run with"
             )
         return protocols
 
@@ -1878,9 +1841,7 @@ class WaylandSeat(Seat):
         try:
             client.wait(timeout=frames * 5 + 20)
         except subprocess.TimeoutExpired:
-            raise RuntimeError(
-                "the capture did not end\n%s" % _tail(path.parent / "capture.log")
-            ) from None
+            raise RuntimeError("the capture did not end\n%s" % _tail(path.parent / "capture.log")) from None
         finally:
             if client.poll() is None:
                 _end(client)
@@ -1888,10 +1849,7 @@ class WaylandSeat(Seat):
 
         raws = sorted(capture.glob("frame.*.rgba"))
         if not raws:
-            raise RuntimeError(
-                "the screen never changed\n%s"
-                % _tail(path.parent / "capture.log")
-            )
+            raise RuntimeError("the screen never changed\n%s" % _tail(path.parent / "capture.log"))
         meta = (capture / "meta").read_text().split()
         width, height, inverted = int(meta[0]), int(meta[1]), meta[2] == "1"
         shots = []
@@ -1912,14 +1870,9 @@ class WaylandSeat(Seat):
             if inverted:
                 convert.append("-flip")
             convert += ["-alpha", "off", str(shot)]
-            answer = subprocess.run(
-                convert, capture_output=True, timeout=60
-            )
+            answer = subprocess.run(convert, capture_output=True, timeout=60)
             if answer.returncode:
-                raise RuntimeError(
-                    "the picture did not convert: %s"
-                    % answer.stderr.decode().strip()
-                )
+                raise RuntimeError("the picture did not convert: %s" % answer.stderr.decode().strip())
             shots.append(shot)
         return shots
 
@@ -1927,10 +1880,7 @@ class WaylandSeat(Seat):
         room = self._room(work)
         protocols = self._generated_protocols()
         wrapper = room / "run.sh"
-        wrapper.write_text(
-            "%s\necho $? > %s\n"
-            % (shlex.join(terminal.argv(command)), room / "the-code")
-        )
+        wrapper.write_text("%s\necho $? > %s\n" % (shlex.join(terminal.argv(command)), room / "the-code"))
         config = room / "sway.conf"
         config.write_text(kiosk_configuration(wrapper))
 
