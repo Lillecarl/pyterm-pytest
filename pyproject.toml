@@ -35,6 +35,9 @@ dependencies = [
 ptyproxy = "pyterm_pytest.ptyproxy_view:main"
 
 [project.optional-dependencies]
+# What the docs site builds with: Sphinx, MyST for the markdown, and
+# the theme. pyterm's `nix/docs/` reads it.
+docs = ["sphinx", "myst-parser", "furo"]
 # What a check installs, beside what pyterm-pytest itself needs.
 #
 # pywayland is here and not in `dependencies` for the reason the ceiling

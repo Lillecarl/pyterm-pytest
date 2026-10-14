@@ -25,4 +25,5 @@ in
   inherit (pyterm) pyterm-pytest shell;
   default = pyterm.pyterm-pytest;
   checks = pyterm.pyterm-pytest.checks;
+  pages = pyterm.pages.pyterm-pytest;
 }
