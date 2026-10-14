@@ -52,6 +52,10 @@ test = [
 
 [project.urls]
 Homepage = "https://github.com/Lillecarl/pyterm-pytest"
+Documentation = "https://lillecarl.github.io/pyterm-pytest/"
+# Work happens in the monorepo this repository is exported from.
+Source = "https://github.com/Lillecarl/pyterm"
+Issues = "https://github.com/Lillecarl/pymux/issues"
 
 [build-system]
 requires = ["hatchling"]
