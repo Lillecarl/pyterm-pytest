@@ -38,9 +38,7 @@ import time
 from pathlib import Path
 
 from protocols.wayland import WlOutput, WlShm
-from protocols.wlr_screencopy_unstable_v1.zwlr_screencopy_manager_v1 import (
-    ZwlrScreencopyManagerV1,
-)
+from protocols.wlr_screencopy_unstable_v1 import ZwlrScreencopyManagerV1
 from pywayland.client import Display
 
 #: How long the screen may stay unchanged before this gives up. A

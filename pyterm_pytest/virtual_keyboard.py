@@ -19,9 +19,7 @@ Lillecarl/pymux#281.
 
 from __future__ import annotations
 
-from protocols.virtual_keyboard_unstable_v1.zwp_virtual_keyboard_manager_v1 import (
-    ZwpVirtualKeyboardManagerV1,
-)
+from protocols.virtual_keyboard_unstable_v1 import ZwpVirtualKeyboardManagerV1
 from protocols.wayland import WlSeat
 from pywayland.client import Display
 
