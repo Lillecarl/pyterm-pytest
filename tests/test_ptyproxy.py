@@ -8,11 +8,11 @@ from __future__ import annotations
 import contextlib
 import os
 import signal
-import subprocess
 import sys
 from dataclasses import dataclass, field
 
 import anyio
+import anyio.abc
 import pytest
 from ptyhost.backends.posix_utils import set_terminal_size
 
@@ -24,7 +24,7 @@ class Terminal:
     "The near side of a pty whose far side runs the viewer."
 
     master: int
-    viewer: subprocess.Popen
+    viewer: anyio.abc.Process
     received: bytearray = field(default_factory=bytearray)
 
     async def until(self, wanted: bytes, seconds: float = 5.0) -> None:
@@ -44,7 +44,7 @@ async def terminal(path, rows=24, columns=80, no_input=False):
     command = [sys.executable, "-m", "pyterm_pytest.ptyproxy_view", str(path)]
     if no_input:
         command.append("--no-input")
-    viewer = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
+    viewer = await anyio.open_process(command, stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
     os.close(slave)
     os.set_blocking(master, False)
     shown = Terminal(master, viewer)
@@ -64,7 +64,8 @@ async def terminal(path, rows=24, columns=80, no_input=False):
             group.cancel_scope.cancel()
     finally:
         viewer.kill()
-        viewer.wait()
+        with anyio.CancelScope(shield=True):
+            await viewer.wait()
         os.close(master)
 
 
