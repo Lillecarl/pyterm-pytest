@@ -52,6 +52,12 @@ def test_a_background_process_is_found_by_its_command_line():
     word = uuid.uuid4().hex
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", word])
     try:
+        # A withPackages python is a wrapper that execs the real one, and
+        # Popen returns before that second exec: its cmdline reads empty
+        # meanwhile. Measured in the check's sandbox, 2026-10-28.
+        waiting = Deadline(10)
+        while child.pid not in pids_naming(word) and not waiting.passed():
+            time.sleep(0.01)
         assert child.pid in pids_naming(word)
     finally:
         child.kill()
