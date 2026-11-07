@@ -759,7 +759,7 @@ class Seat:
             ),
         )
 
-    def burst_frames(self, terminal, command, work, path, log_path, frames):
+    def burst_frames(self, terminal, command, work, path, log_path, frames, fenced=None):
         """
         `frames` pictures taken at fixed intervals.
 
@@ -767,8 +767,20 @@ class Seat:
         burst at fixed intervals samples whatever the screen was doing
         at those moments, and a blink longer than the burst reads as no
         blink at all. A seat that hears damage measures instead.
+
+        `fenced` is the token the program fences with once it has drawn,
+        and the burst starts on it rather than `BLINK_START` after the
+        start: on a loaded machine the clock began before the drawing
+        ended. Lillecarl/pymux#588.
         """
-        return self.picture_of(terminal, command, work, path, log_path, frames=frames)
+        what = "%s of %s" % (self.subject, terminal.name)
+
+        def burst(take_one, ended):
+            if fenced is not None:
+                wait_for_the_clipboard(self.clipboard, fenced, ended, what, log_path, work=work)
+            return _burst(path, take_one, ended, what, log_path, fenced=fenced is not None)
+
+        return self.running(terminal, command, work, log_path, burst)
 
     #: How a message names what this seat photographs. The X seat takes
     #: a picture of one window among several; the Wayland seat takes the
@@ -1223,7 +1235,7 @@ def the_tree_is_quiet(before, after) -> bool:
     return after[0] == 0 and after[1] - before[1] <= IDLE_TICKS
 
 
-def _burst(path, take_one, ended, what, log_path):
+def _burst(path, take_one, ended, what, log_path, fenced=False):
     """
     Take `BLINK_FRAMES` pictures, `BLINK_GAP` apart, and keep them all.
 
@@ -1232,10 +1244,11 @@ def _burst(path, take_one, ended, what, log_path):
     and one that has stopped blinking settles at once. So this takes a
     fixed burst and the caller compares them.
 
-    The wait before the first one is fixed, because the fixture draws
-    a few bytes and there is nothing to settle on.
+    Without a fence the wait before the first one is fixed, because
+    there is nothing to settle on.
     """
-    time.sleep(BLINK_START)
+    if not fenced:
+        time.sleep(BLINK_START)
     shots = []
     for number in range(BLINK_FRAMES):
         if number:
@@ -1793,7 +1806,7 @@ class WaylandSeat(Seat):
             )
         return protocols
 
-    def burst_frames(self, terminal, command, work, path, log_path, frames):
+    def burst_frames(self, terminal, command, work, path, log_path, frames, fenced=None):
         """
         `frames` pictures taken when the screen changes, not when the
         clock says so.
@@ -1804,15 +1817,21 @@ class WaylandSeat(Seat):
         pixels change, so every frame is a moment something moved, and
         a cursor that blinks slowly is no longer mistaken for one that
         never blinks.
-        """
 
-        return self._in_a_terminal(
-            terminal,
-            command,
-            work,
-            log_path,
-            lambda shown, ended: self._frames_on_damage(shown.room, shown.display, path, frames),
-        )
+        **From the fence on, when there is one.** Every frame the
+        drawing makes is damage too, so frames of a drawing that ends
+        late fill the burst before the cursor blinks: a loaded run saw
+        the cursor change six times bare and once in a pane.
+        Lillecarl/pymux#588.
+        """
+        what = "%s of %s" % (self.subject, terminal.name)
+
+        def burst(shown, ended):
+            if fenced is not None:
+                wait_for_the_clipboard(self.clipboard, fenced, ended, what, log_path, work=work)
+            return self._frames_on_damage(shown.room, shown.display, path, frames)
+
+        return self._in_a_terminal(terminal, command, work, log_path, burst)
 
     def _frames_on_damage(self, room, display, path, frames):
         # Beside the pictures, not in the compositor's room: a run
