@@ -6,7 +6,7 @@ They are not evidence: a terminal that is behind and starved draws
 nothing between them either, and one run photographed a pane that was
 still catching up. So the tree that draws is read as well, and a
 picture is kept only when both say the drawing has finished.
-Lillecarl/pymux#435.
+Lillecarl/pyterm#437.
 """
 
 from __future__ import annotations

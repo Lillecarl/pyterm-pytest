@@ -18,7 +18,7 @@
   # the seat's keyboard holder imports it and the ceiling imports every
   # module: what a module imports has to be on the path of the suite that
   # judges it. `default.nix` builds this from `pyproject.toml`, so there is
-  # no second list here. Lillecarl/pymux#319.
+  # no second list here. Lillecarl/pyterm#321.
   testEnv,
   callPackage,
   testSources,

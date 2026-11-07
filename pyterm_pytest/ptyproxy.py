@@ -1,6 +1,6 @@
 """
 The test's half of ptyproxy: run an application on a pty, and serve
-what it writes to every terminal that shows it. Lillecarl/pymux#590.
+what it writes to every terminal that shows it. Lillecarl/pyterm#592.
 
     async with Proxy.serving(path) as proxy:
         # Each terminal runs `ptyproxy <path>`, from `ptyproxy_view`.
@@ -25,7 +25,7 @@ and each has its own call:
 **The application starts once every viewer it waits for is attached and
 all of them report one size.** A viewer that joins late misses the first
 bytes, and a terminal that reports a size before it takes its final one
-is a terminal the application draws for wrongly. Lillecarl/pymux#584.
+is a terminal the application draws for wrongly. Lillecarl/pyterm#586.
 
 **Queries are answered here, when `answer` says how.** Then both of two
 terminals showing one application get the same answer at the same time,

@@ -2,7 +2,7 @@
 # build read it by running it. Nix reads this file instead, at evaluation
 # time, so the dependency list here is the one the package is built from and
 # there is no second copy in a `.nix` file to fall out of step.
-# Lillecarl/pymux#319.
+# Lillecarl/pyterm#321.
 [project]
 name = "pyterm-pytest"
 version = "0.1"
@@ -18,13 +18,13 @@ requires-python = ">=3.14"
 # Pillow is here and not in the `test` extra below, because judging a
 # picture is what a seat is for: `seats.differences` is the answer every
 # picture check reads. It replaced `compare -metric AE`, which counts
-# nothing (Lillecarl/pymux#368), and a library that hands over the
+# nothing (Lillecarl/pyterm#370), and a library that hands over the
 # pixels is the only way to be sure what was measured.
 dependencies = [
     "pillow",
     # The proxy's server runs the application on a pty through ptyhost,
     # and takes anyio from it; it parses what the application wrote with
-    # pyte. Lillecarl/pymux#590.
+    # pyte. Lillecarl/pyterm#592.
     "ptyhost",
     "pyte",
 ]
@@ -55,7 +55,7 @@ Homepage = "https://github.com/Lillecarl/pyterm-pytest"
 Documentation = "https://lillecarl.github.io/pyterm-pytest/"
 # Work happens in the monorepo this repository is exported from.
 Source = "https://github.com/Lillecarl/pyterm"
-Issues = "https://github.com/Lillecarl/pymux/issues"
+Issues = "https://github.com/Lillecarl/pyterm/issues"
 
 [build-system]
 requires = ["hatchling"]

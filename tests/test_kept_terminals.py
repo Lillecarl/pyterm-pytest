@@ -2,7 +2,7 @@
 A seat keeps one terminal per kind for the run, and resets it between
 runs. The terminal here is a pty with the viewer on its far side and a
 pyte screen on its near one, and a picture is that screen as pixels.
-Lillecarl/pymux#591.
+Lillecarl/pyterm#593.
 """
 
 from __future__ import annotations

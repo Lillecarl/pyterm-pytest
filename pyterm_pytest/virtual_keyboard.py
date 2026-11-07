@@ -14,7 +14,7 @@ keyboard XML puts a `protocols` package on this script's path. The
 keyboard lives as long as this process does, which is as long as the
 compositor's picture.
 
-Lillecarl/pymux#281.
+Lillecarl/pyterm#283.
 """
 
 from __future__ import annotations

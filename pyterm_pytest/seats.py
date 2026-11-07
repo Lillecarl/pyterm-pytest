@@ -8,7 +8,7 @@ suite that photographs a real terminal borrows the same two. An
 of ours holding a virtual keyboard on the seat, and takes the output
 with `grim`. The settle loop asks the pixels and the tree that draws
 them, never the clock; the fixed waits that are left are the ones
-neither question can answer, and Lillecarl/pymux#276 is the pass that
+neither question can answer, and Lillecarl/pyterm#278 is the pass that
 narrows them further.
 """
 
@@ -51,7 +51,7 @@ SETTLE_TIMEOUT = 15.0
 #: and `import` of a window that has gone never answers at all -- twelve
 #: calls of twelve waited until they were cut off. So a screenshot that
 #: reaches this is not a slow one, it is one that nothing will ever
-#: answer. Lillecarl/pymux#462.
+#: answer. Lillecarl/pyterm#464.
 PICTURE_TIMEOUT = 30.0
 
 #: How much CPU the tree that draws a picture may use between two of
@@ -62,7 +62,7 @@ PICTURE_TIMEOUT = 30.0
 #: times and two ticks twice, and no task of it was runnable at any of
 #: the 48. A tree that is still drawing uses about forty in the same
 #: interval, which is a whole core of it, so the bound sits far from
-#: both answers. Lillecarl/pymux#435.
+#: both answers. Lillecarl/pyterm#437.
 IDLE_TICKS = 5
 
 #: A blink is about half a second on and half a second off. Eight
@@ -99,7 +99,7 @@ VIEWER = [sys.executable, "-m", "pyterm_pytest.ptyproxy_view"]
 #: `pyte/nix/suite.nix` fails the run derivation on this code alone,
 #: so nix keeps nothing and the next build tries again. It passes the
 #: number in, so the two cannot drift; the literal is for a run
-#: started outside nix. Lillecarl/pymux#216.
+#: started outside nix. Lillecarl/pyterm#218.
 COULD_NOT_RUN = int(os.environ.get("PYTERM_COULD_NOT_RUN") or 97)
 
 
@@ -114,7 +114,7 @@ class TheSeatIsGone(Exception):
     **Not a `RuntimeError`.** Every driver wraps a picture in `except
     RuntimeError` to put the logs of the room beside the reason. A seat
     that is gone caught there comes out as a verdict on the picture,
-    which is the one thing it is not. Lillecarl/pymux#431.
+    which is the one thing it is not. Lillecarl/pyterm#433.
     """
 
 
@@ -124,7 +124,7 @@ def open_the_seats(terminals, work):
 
     A seat that will not start is not a verdict on anything, so the
     failure is `TheSeatIsGone` and not whatever the display server
-    said. Lillecarl/pymux#216.
+    said. Lillecarl/pyterm#218.
     """
     seats = {}
     for terminal in terminals:
@@ -145,7 +145,7 @@ def with_no_answer(reason):
 
     A `main` returns this, and `pyte/nix/suite.nix` fails the run
     derivation on it, so nix keeps nothing and the next build tries
-    again. Lillecarl/pymux#216.
+    again. Lillecarl/pyterm#218.
     """
     print()
     print("This run has no answer. %s" % (reason,), flush=True)
@@ -208,7 +208,7 @@ def how_busy(roots):
     and two equal pictures do not say that: a process that is behind
     and starved draws nothing between them either. A task that still
     has work is `R`, and one that has finished is asleep on its socket,
-    which is the difference pixels cannot hold. Lillecarl/pymux#435.
+    which is the difference pixels cannot hold. Lillecarl/pyterm#437.
 
     **Per task and not per process.** kitty rasterizes with llvmpipe's
     worker threads and foot has render workers of its own, so a main
@@ -279,7 +279,7 @@ class Seat:
     was most of the time a picture check took. The reset is checked:
     the terminal after it has to look as it did after its first one,
     or the seat lets it go and the next command starts a new one.
-    Lillecarl/pymux#591.
+    Lillecarl/pyterm#593.
     """
 
     name = ""
@@ -491,8 +491,8 @@ class Seat:
         and not in the room of any one picture, so the sandbox throws it
         away and the run output never holds it. A run whose answer is
         "could not draw" has to carry the reason with it, because the
-        run output is all a person gets. Lillecarl/pymux#216,
-        Lillecarl/pymux#433.
+        run output is all a person gets. Lillecarl/pyterm#218,
+        Lillecarl/pyterm#435.
         """
 
     def trouble(self) -> str:
@@ -506,7 +506,7 @@ class Seat:
         working directory rather than the room, so the message a person
         reads holds nothing that says what happened.
 
-        Lillecarl/pymux#216.
+        Lillecarl/pyterm#218.
         """
         return ""
 
@@ -555,7 +555,7 @@ class Seat:
         The first terminal shows it bare. The second shows it through
         the program under test: `through` takes the shell command that
         runs a viewer, and gives back the command that runs that viewer
-        inside the program. Lillecarl/pymux#592.
+        inside the program. Lillecarl/pyterm#594.
 
         **Shared, by default: one run, one stream.** Both viewers attach
         to one proxy, so both terminals get the same bytes, and a pixel
@@ -680,7 +680,7 @@ class Seat:
     #: walls -- cage offers no clipboard protocol at all,
     #: wl-clipboard's core fallback wants a keyboard, and foot refuses
     #: an unfocused write -- and a virtual keyboard held beside sway
-    #: is what got past the last of them. Lillecarl/pymux#281.
+    #: is what got past the last of them. Lillecarl/pyterm#283.
     reads_fence = False
 
     def clipboard(self) -> bytes:
@@ -771,7 +771,7 @@ class Seat:
         `fenced` is the token the program fences with once it has drawn,
         and the burst starts on it rather than `BLINK_START` after the
         start: on a loaded machine the clock began before the drawing
-        ended. Lillecarl/pymux#588.
+        ended. Lillecarl/pyterm#590.
         """
         what = "%s of %s" % (self.subject, terminal.name)
 
@@ -791,7 +791,7 @@ class Seat:
 def named_command(command, name, script):
     """
     A command line that runs `command` under a process named `name`,
-    written to `script`. Lillecarl/pymux#593.
+    written to `script`. Lillecarl/pyterm#595.
 
     A multiplexer names the program in a pane's foreground by the
     argv[0] of its process group's leader. Here the leader is a bash
@@ -830,7 +830,7 @@ class _Side:
 class Twins:
     """
     An application shown by two kept terminals at once: what a director
-    drives. `Seat.twins` makes one. Lillecarl/pymux#593.
+    drives. `Seat.twins` makes one. Lillecarl/pyterm#595.
 
     A scenario is steps on it: `press` keys, wait until the application
     `shows` some text, and `photograph` both terminals. The waits read
@@ -965,7 +965,7 @@ def wait_for_the_file(path, ended, what, log_path, timeout=APPEAR_TIMEOUT):
     frame on the screen is the one the keys asked for. A settle that
     starts before them keeps the screen from before them and calls it
     finished. Its absence after this long is a run that photographs
-    nothing, and this says so. Lillecarl/pymux#275.
+    nothing, and this says so. Lillecarl/pyterm#277.
     """
     deadline = time.time() + timeout
     while not path.exists():
@@ -989,7 +989,7 @@ def fence(work, token):
     A terminal refuses the clipboard escape while its window is
     unfocused, and the focus comes when the compositor sends it, which
     is after the program started. A fixed wait before one fence was a
-    guess, and a loaded machine beat it (Lillecarl/pymux#583).
+    guess, and a loaded machine beat it (Lillecarl/pyterm#585).
 
     Then it says it stopped, and the settle waits for that: a fence
     written after the seat saw the token would land inside the settle.
@@ -1000,7 +1000,7 @@ def fence(work, token):
     a fence has its final size, and a program that fences first draws
     at that size rather than at the one the terminal started with.
     foot drew a recording at a narrower size once without it
-    (Lillecarl/pymux#584).
+    (Lillecarl/pyterm#586).
     """
     taken, stopped = _fence_files(work, token)
     payload = base64.b64encode(token.encode()).decode()
@@ -1031,7 +1031,7 @@ def wait_for_the_clipboard(
     The clipboard only changes when the outermost terminal has acted
     on the bytes, and the terminal is the thing the picture is of: a
     fence the terminal never took is a run that photographs nothing,
-    and this says so. Lillecarl/pymux#281.
+    and this says so. Lillecarl/pyterm#283.
 
     With `work`, the program wrote its fence with `fence`, and this
     answers it: the token was taken, so stop writing it.
@@ -1090,7 +1090,7 @@ def _settle(
     is waiting for a key is perfectly still, so two pictures of it are
     the same and this would keep the screen from before the keys and
     call it settled. Nothing that only writes bytes needs it.
-    Lillecarl/pymux#161, Lillecarl/pymux#275, Lillecarl/pymux#281.
+    Lillecarl/pyterm#163, Lillecarl/pyterm#277, Lillecarl/pyterm#283.
 
     `judge` reads the state of the program once that wait is over.
     **The fence proves the program finished the keys, never that a key
@@ -1100,14 +1100,14 @@ def _settle(
     one pane and stayed green, because a picture of the wrong state is
     still a picture. So the state is asked for and compared, and a
     wrong one is a red run with no picture kept.
-    Lillecarl/pymux#353.
+    Lillecarl/pyterm#355.
 
     `how_busy` reads the tree that draws, before each picture, and the
     reading goes into `settle-<side>.log` beside the pictures. Two
     equal pictures are not evidence that the drawing has finished: a
     process that is behind and starved draws nothing between them
     either, which is how one run photographed a pane that was still
-    catching up. Lillecarl/pymux#435.
+    catching up. Lillecarl/pyterm#437.
     """
     if isinstance(not_before, str):
         not_before = (not_before,)
@@ -1128,7 +1128,7 @@ def _settle(
     #: The older of the last pair that differed, and where they did.
     #: `previous` cannot be either: the loop copies the new picture
     #: over it, so the two kept frames were the same image every time
-    #: and "what moved" showed nothing. Lillecarl/pymux#362.
+    #: and "what moved" showed nothing. Lillecarl/pyterm#364.
     differed = work / "settle-differed.png"
     difference = work / "settle-difference.png"
 
@@ -1176,7 +1176,7 @@ def _settle(
     # **Say which half did not hold.** A settle waits for two things:
     # a screen that stopped changing, and a drawing tree that stopped
     # working. One message for both leaves the next flake as hard to
-    # read as this one was. Lillecarl/pymux#435.
+    # read as this one was. Lillecarl/pyterm#437.
     why = []
     if box:
         why.append("%dx%d at %d,%d kept changing" % (box[2], box[3], box[0], box[1]))
@@ -1193,7 +1193,7 @@ def _watch_the_tree(log_path):
     The line holds the moment, how many pixels changed, how many tasks
     of the drawing tree were runnable, and what the tree has used. A
     settle that stopped too early leaves the reading that says so, and
-    nothing else in a run holds it. Lillecarl/pymux#435.
+    nothing else in a run holds it. Lillecarl/pyterm#437.
     """
     if log_path is None:
         return lambda *_ignored: None
@@ -1228,7 +1228,7 @@ def the_tree_is_quiet(before, after) -> bool:
     A tree that has finished is asleep on its socket and is neither.
 
     A seat that cannot read its tree answers yes, so the settle is what
-    it was. Lillecarl/pymux#435.
+    it was. Lillecarl/pyterm#437.
     """
     if before is None or after is None:
         return True
@@ -1322,7 +1322,7 @@ def why_the_display_refuses(number):
     so a server that was alive and unreachable read as healthy: the
     terminal's "Can't open display" became a verdict on a picture, the
     check went red, and a red run of a check stays in the store until
-    somebody deletes it by hand. Lillecarl/pymux#431.
+    somebody deletes it by hand. Lillecarl/pyterm#433.
 
     A refusal carries the server's own words, and "Maximum number of
     clients reached" is one of them. Nothing else in a run holds them,
@@ -1431,7 +1431,7 @@ class XSeat(Seat):
                 # processes beside it: 67 of 300 client departures
                 # refused the client that came next, the worst of them
                 # for 0.305s, and with this flag 0 of 300.
-                # Lillecarl/pymux#431.
+                # Lillecarl/pyterm#433.
                 ["Xvfb", "-noreset", "-displayfd", str(write_fd), "-screen", "0", SCREEN],
                 pass_fds=(write_fd,),
                 stdout=output,
@@ -1483,7 +1483,7 @@ class XSeat(Seat):
         refusal opens is short -- 0.305s at its worst, measured -- so a
         display that turned this terminal away answers again by the time
         anything asks it. What the terminal said does not change.
-        Lillecarl/pymux#431.
+        Lillecarl/pyterm#433.
         """
         said = Path(log_path).read_bytes() if Path(log_path).exists() else b""
         if THE_DISPLAY_WOULD_NOT_OPEN.search(said):
@@ -1533,7 +1533,7 @@ class XSeat(Seat):
         worth giving is whether the window is still there. A
         `TimeoutExpired` named the file it was writing instead, and it
         is not a `RuntimeError`, so no driver put the logs of the room
-        beside it. Lillecarl/pymux#462.
+        beside it. Lillecarl/pyterm#464.
         """
         self.still_there()
         return RuntimeError(
@@ -1628,7 +1628,7 @@ def kiosk_configuration(wrapper):
     "Failed to bind socket @/tmp/.X11-unix/X0: Address already in use".
     foot and kitty speak Wayland and nothing else, and `_open` passes an
     empty DISPLAY, so no terminal here could reach an X server.
-    Lillecarl/pymux#432.
+    Lillecarl/pyterm#434.
     """
     return "default_border none\nxwayland disable\noutput HEADLESS-1 resolution 1024x768\nexec /bin/sh %s\n" % (
         wrapper,
@@ -1683,7 +1683,7 @@ class WaylandSeat(Seat):
         A compositor here serves one terminal, so there is no long lived
         server to ask about -- the question is only ever about the one
         this seat is drawing with now, and between pictures there is
-        none and nothing is wrong. Lillecarl/pymux#477.
+        none and nothing is wrong. Lillecarl/pyterm#479.
         """
         if self._compositor is None or self._compositor.poll() is None:
             return ""
@@ -1741,7 +1741,7 @@ class WaylandSeat(Seat):
 
         A `TimeoutExpired` named the file it was writing and nothing
         else, and it is not a `RuntimeError`, so no driver put the logs
-        of the room beside it. Lillecarl/pymux#477.
+        of the room beside it. Lillecarl/pyterm#479.
         """
         self.still_there()
         return RuntimeError(
@@ -1822,7 +1822,7 @@ class WaylandSeat(Seat):
         drawing makes is damage too, so frames of a drawing that ends
         late fill the burst before the cursor blinks: a loaded run saw
         the cursor change six times bare and once in a pane.
-        Lillecarl/pymux#588.
+        Lillecarl/pyterm#590.
         """
         what = "%s of %s" % (self.subject, terminal.name)
 
@@ -2003,7 +2003,7 @@ def _what_moved(difference):
     **Not `convert("L")`**, which weighs the bands the way an eye sees
     them: a pixel that differs in blue alone weighs 0.07 of that
     difference and rounds away to nothing. Weighing a difference
-    instead of counting it is what Lillecarl/pymux#368 was.
+    instead of counting it is what Lillecarl/pyterm#370 was.
     """
     red, green, blue = difference.split()
     return ImageChops.lighter(ImageChops.lighter(red, green), blue)
@@ -2037,7 +2037,7 @@ def differences(first, second, into=None):
     answer 255/765 of the pixels, and `rgb(1,0,0)` answers 1/765 of
     them. Every pixel of all three differs. A small difference over few
     pixels therefore counted as none at all, and `_settle` calls a
-    screen still on that answer. Lillecarl/pymux#368.
+    screen still on that answer. Lillecarl/pyterm#370.
     """
     count, _moved = _measured(first, second, into)
     return count
@@ -2056,7 +2056,7 @@ def changed_region(first, second, into):
     `magick <into> -format %@`, the trim of the picture `compare`
     wrote, which is a faded copy of the first picture with the
     differences marked on it -- so the trim held all the ink and the
-    same box came back whatever had moved. Lillecarl/pymux#370.
+    same box came back whatever had moved. Lillecarl/pyterm#372.
     """
     count, moved = _measured(first, second, into)
     if not count:

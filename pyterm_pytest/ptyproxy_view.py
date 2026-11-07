@@ -1,6 +1,6 @@
 """
 The viewer half of ptyproxy: what runs inside a terminal and shows it
-the application a test runs. Lillecarl/pymux#590.
+the application a test runs. Lillecarl/pyterm#592.
 
     ptyproxy SOCKET [--no-input]
 

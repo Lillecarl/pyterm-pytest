@@ -3,9 +3,9 @@ What `differences` and `changed_region` promise about two pictures.
 
 Nothing judged them, and two faults stood in them for as long as the
 picture farms have run. `compare -metric AE` says it counts the pixels
-that differ and sums the channel error instead (Lillecarl/pymux#368),
+that differ and sums the channel error instead (Lillecarl/pyterm#370),
 and the box came from trimming the picture `compare` draws, which holds
-all the ink and not what moved (Lillecarl/pymux#370).
+all the ink and not what moved (Lillecarl/pyterm#372).
 
 Each fault has a test here that fails on the old answer.
 """
@@ -61,7 +61,7 @@ def test_one_pixel_off_by_one_in_one_band_is_one_pixel(tmp_path):
 def test_the_box_holds_what_moved_and_not_what_is_drawn(tmp_path):
     """
     A blink is judged on this box, so ink that never moved must stay
-    out of it. Lillecarl/pymux#370.
+    out of it. Lillecarl/pyterm#372.
     """
     ink = [((1, 1, 12, 4), (255, 255, 255))]
     one = picture(tmp_path / "one.png", marks=ink)
@@ -112,7 +112,7 @@ DRAWING = [((0, 0, 2, 2), (255, 0, 0)), ((2, 0, 2, 2), (0, 204, 51))]
 
 
 def test_one_drawing_in_two_places_is_the_same_drawing(tmp_path):
-    "Where a terminal put it is not a difference. Lillecarl/pymux#262."
+    "Where a terminal put it is not a difference. Lillecarl/pyterm#264."
     moved = [((box[0] + 7, box[1] + 3, box[2], box[3]), colour) for box, colour in DRAWING]
     one = picture(tmp_path / "one.png", size=(20, 10), marks=DRAWING)
     two = picture(tmp_path / "two.png", size=(30, 14), marks=moved)

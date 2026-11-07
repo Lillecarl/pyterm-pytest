@@ -69,7 +69,7 @@ def test_a_run_with_no_answer_does_not_end_with_zero_or_one():
     """
     Zero is a pass and one is any error, and `pyte/nix/suite.nix` has
     to tell "could not run" from both: it keeps the first two and
-    throws this one away. Lillecarl/pymux#216.
+    throws this one away. Lillecarl/pyterm#218.
     """
     assert with_no_answer("the seat would not start") == COULD_NOT_RUN
     assert COULD_NOT_RUN not in (0, 1, 2)
@@ -120,7 +120,7 @@ def test_the_x_seat_asks_its_server_not_to_reset(monkeypatch, tmp_path):
 
     Measured, with an Xvfb of each kind and 24 busy processes beside
     it: 67 of 300 client departures refused the client that came next,
-    and 0 of 300 with `-noreset`. Lillecarl/pymux#431.
+    and 0 of 300 with `-noreset`. Lillecarl/pyterm#433.
     """
     monkeypatch.setattr(the_seats.subprocess, "Popen", _AnXServer)
 
@@ -203,7 +203,7 @@ def test_a_display_that_refuses_gives_the_reason_the_server_gave():
     """
     The server's own words are the only thing that says why, and
     nothing else in a run holds them. "Maximum number of clients
-    reached" is one of them. Lillecarl/pymux#431.
+    reached" is one of them. Lillecarl/pyterm#433.
     """
     number, door = a_server_that_answers(refusal(b"Maximum number of clients reached"))
     try:
@@ -228,7 +228,7 @@ def test_a_server_that_runs_and_cannot_be_reached_is_a_seat_that_is_gone(tmp_pat
     display that refuses every client while its server runs read as
     healthy, so the terminal's "Can't open display" became a verdict on
     a picture and a red run of it stayed in the store.
-    Lillecarl/pymux#431.
+    Lillecarl/pyterm#433.
     """
     seat = XSeat()
     seat._process = _Running()
@@ -257,7 +257,7 @@ def test_the_wayland_seat_starts_no_x_server():
     it has a client for it, so every picture took a display number and
     gave it back. The X seat's server is on the other side of that
     search. Nothing on this seat speaks X: foot and kitty are Wayland
-    only and `_open` passes an empty DISPLAY. Lillecarl/pymux#432.
+    only and `_open` passes an empty DISPLAY. Lillecarl/pyterm#434.
     """
     assert "xwayland disable" in kiosk_configuration("/tmp/run.sh")
 
@@ -268,7 +268,7 @@ def test_the_x_seat_keeps_its_server_log(tmp_path):
     beside the run and not in the room of any one picture -- and the
     sandbox throws the run's own directory away. A run whose answer is
     "could not draw" has to carry the reason with it.
-    Lillecarl/pymux#433.
+    Lillecarl/pyterm#435.
     """
     work = tmp_path / "work"
     work.mkdir()
@@ -302,7 +302,7 @@ def test_a_seat_that_is_gone_is_not_a_runtime_error():
     Every driver wraps a picture in `except RuntimeError` to put the
     logs of the room beside the reason. A seat that is gone caught
     there comes out as a verdict on the picture, which is the one thing
-    it is not. Lillecarl/pymux#431.
+    it is not. Lillecarl/pyterm#433.
     """
     assert not issubclass(TheSeatIsGone, RuntimeError)
 
@@ -313,7 +313,7 @@ def test_a_terminal_that_never_opened_the_display_fails_the_seat(tmp_path):
     is no picture to judge. The window a refusal opens is short --
     0.305s at its worst, measured -- so the display answers again by
     the time anything asks it, and what the terminal said is what
-    stays. Lillecarl/pymux#431.
+    stays. Lillecarl/pyterm#433.
     """
     seat = XSeat()
     seat.number = ":0"
@@ -361,7 +361,7 @@ def test_a_terminal_that_died_of_something_else_is_still_a_verdict(tmp_path):
 # of twelve waited until they were cut off, while a live window under
 # three times as much load as the machine has cores answered in 0.85s
 # at worst. So the question a timed out screenshot has to answer is
-# whether the window is still there. Lillecarl/pymux#462.
+# whether the window is still there. Lillecarl/pyterm#464.
 
 
 class _NothingAnswers:
@@ -422,7 +422,7 @@ def test_a_picture_that_never_came_is_a_runtime_error(monkeypatch, tmp_path):
     """
     Every driver wraps a picture in `except RuntimeError` to put the
     logs of the room beside the reason. `TimeoutExpired` is not one, so
-    the reason came out bare. Lillecarl/pymux#462.
+    the reason came out bare. Lillecarl/pyterm#464.
     """
     seat, door = _a_seat_on_a_display_that_serves(tmp_path)
     monkeypatch.setattr(the_seats.subprocess, "run", _NothingAnswers(False))
@@ -438,7 +438,7 @@ def test_a_picture_that_never_came_is_a_runtime_error(monkeypatch, tmp_path):
 def test_a_picture_that_never_came_asks_the_display_first(monkeypatch, tmp_path):
     """
     A display that went away takes every picture after it, and that is
-    not a verdict on any of them. Lillecarl/pymux#216.
+    not a verdict on any of them. Lillecarl/pyterm#218.
     """
     seat = XSeat()
     seat._process = _Running()
@@ -455,7 +455,7 @@ def test_a_picture_that_never_came_asks_the_display_first(monkeypatch, tmp_path)
 #
 # `grim` takes the whole output, so there is no window to ask about --
 # the question is whether the compositor is still there to take it
-# from. Lillecarl/pymux#477.
+# from. Lillecarl/pyterm#479.
 
 
 class _AGrimThatHangs:

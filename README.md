@@ -3,7 +3,7 @@
 > This repository is a copy. Work on pyterm-pytest happens in
 > [pyterm](https://github.com/Lillecarl/pyterm), which exports its `pyterm-pytest/`
 > directory here on every push. Send changes there, and issues to
-> [Lillecarl/pymux](https://github.com/Lillecarl/pymux/issues).
+> [Lillecarl/pyterm](https://github.com/Lillecarl/pyterm/issues).
 > The docs are at <https://lillecarl.github.io/pyterm-pytest/>.
 
 <!-- The lines above are pyterm's nix/shared/readme-head.md, written by sync-sources. -->
@@ -17,27 +17,27 @@ of them need the same thing:
 
 * **Seats** -- a real terminal on a display server of its own: Xvfb for
   xterm, a kiosk compositor for foot and kitty, and how to photograph
-  either. Lillecarl/pymux#276. A seat starts each terminal once per run, with
+  either. Lillecarl/pyterm#278. A seat starts each terminal once per run, with
   the `ptyproxy` viewer in it, and runs each command through the
   proxy. Between commands it resets the terminal and checks the
-  picture against the terminal's first blank one. Lillecarl/pymux#591.
+  picture against the terminal's first blank one. Lillecarl/pyterm#593.
   `Seat.twins` shows an application in two kept terminals at once,
   bare in one and through the program under test in the other, and
   hands a director a `Twins` to press keys, wait for text and take a
   picture of each. Shared, one run feeds both and the proxy answers
   the queries; `apart`, each terminal runs and answers a copy of its
   own. Each terminal's replies are kept either way.
-  Lillecarl/pymux#592, Lillecarl/pymux#593.
+  Lillecarl/pyterm#594, Lillecarl/pyterm#595.
 * **Drivers** -- run a program on a pty, press keys at it, and fence
   the moment its work is done. Built on `ptyhost`, never around it.
-  Lillecarl/pymux#275. `ptyproxy` is the first: the test runs the
+  Lillecarl/pyterm#277. `ptyproxy` is the first: the test runs the
   application and serves its bytes on a socket to any number of
   terminals, each running the `ptyproxy` viewer, and parses the same
-  bytes into a pyte screen a scenario reads. Lillecarl/pymux#590.
+  bytes into a pyte screen a scenario reads. Lillecarl/pyterm#592.
 * **Budgets and recorded lists** -- read a name-to-count file, judge a
   run against one, and complain at a difference in either direction.
   Three copies of that reader exist in the collection today.
-  Lillecarl/pymux#277.
+  Lillecarl/pyterm#279.
 
 ## The ceiling
 
