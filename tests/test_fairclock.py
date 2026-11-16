@@ -279,9 +279,10 @@ def test_a_command_says_what_subprocess_run_would():
 
 def test_a_command_that_hangs_is_killed_on_time():
     began = time.monotonic()
-    with pytest.raises(subprocess.TimeoutExpired):
+    with pytest.raises(subprocess.TimeoutExpired, match="of wall time; the thread that waited most") as expired:
         fair_subprocess.run([sys.executable, "-c", "import time; time.sleep(30)"], 0.3, capture_output=True)
     assert time.monotonic() - began < 2
+    assert expired.value.wall >= 0.3
 
 
 @needs_proc

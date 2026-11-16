@@ -155,6 +155,11 @@ class Clock:
         self._last.update(self._read())
         return max((waited - self._first.get(key, 0.0) for key, waited in self._last.items()), default=0.0)
 
+    def waited(self) -> float:
+        "What every watched thread waited for a CPU since `start()`, together."
+        self._last.update(self._read())
+        return sum(waited - self._first.get(key, 0.0) for key, waited in self._last.items())
+
     def elapsed(self) -> float:
         return time.monotonic() - self.began
 
@@ -187,7 +192,11 @@ class Deadline:
         return self.clock.left(self.seconds) <= 0
 
     def __str__(self) -> str:
-        return "%.1f s, and %.1f s more that the processes waited for a CPU" % (self.seconds, self.clock.stalled())
+        return "%.1f s, and %.1f s more that the processes waited for a CPU (%.1f s summed over every thread)" % (
+            self.seconds,
+            self.clock.stalled(),
+            self.clock.waited(),
+        )
 
 
 class Stopwatch:

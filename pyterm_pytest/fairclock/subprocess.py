@@ -14,7 +14,25 @@ from typing import Any
 from . import Clock
 from ._watch import FLOOR
 
-__all__ = ["run"]
+__all__ = ["FairTimeoutExpired", "run"]
+
+
+class FairTimeoutExpired(subprocess.TimeoutExpired):
+    "`TimeoutExpired`, and the clock it was read from, so a failure says where the time went."
+
+    def __init__(self, *args: Any, clock: Clock, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.wall = clock.elapsed()
+        self.most = clock.stalled()
+        self.together = clock.waited()
+
+    def __str__(self) -> str:
+        return "%s: %.1f s of wall time; the thread that waited most waited %.1f s, and all together %.1f s" % (
+            super().__str__(),
+            self.wall,
+            self.most,
+            self.together,
+        )
 
 
 def run(
@@ -46,7 +64,7 @@ def run(
                     continue
                 process.kill()
                 stdout, stderr = process.communicate()
-                raise subprocess.TimeoutExpired(args, seconds, output=stdout, stderr=stderr) from None
+                raise FairTimeoutExpired(args, seconds, output=stdout, stderr=stderr, clock=clock) from None
     done = subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
     if check:
         done.check_returncode()
