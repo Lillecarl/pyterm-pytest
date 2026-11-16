@@ -279,10 +279,18 @@ def test_a_command_says_what_subprocess_run_would():
 
 def test_a_command_that_hangs_is_killed_on_time():
     began = time.monotonic()
-    with pytest.raises(subprocess.TimeoutExpired, match="of wall time; the thread that waited most") as expired:
+    with pytest.raises(subprocess.TimeoutExpired, match=r"of wall time, .* forgiven as waits for a CPU") as expired:
         fair_subprocess.run([sys.executable, "-c", "import time; time.sleep(30)"], 0.3, capture_output=True)
     assert time.monotonic() - began < 2
     assert expired.value.wall >= 0.3
+
+
+def test_processes_that_wait_in_turn_add_up_and_threads_side_by_side_do_not(monkeypatch):
+    "A server and the check it runs wait one after the other; one process's threads wait together."
+    readings = iter([{}, {(10, 10): 2.0, (10, 11): 3.0, (20, 20): 4.0}])
+    monkeypatch.setattr(Clock, "_read", lambda self: next(readings))
+    clock = Clock().start()
+    assert clock.stalled() == 3.0 + 4.0
 
 
 @needs_proc

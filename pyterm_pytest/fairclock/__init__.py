@@ -6,8 +6,8 @@ a CPU, and a wall clock counts those seconds against it: a test fails
 for the machine's load and not for a fault. Linux keeps, per thread,
 the nanoseconds it sat on a run queue (`/proc/<pid>/task/<tid>/schedstat`,
 the second field). A `Clock` watches this process, every process under
-it, and the pids it is given, and answers the most any one of their
-threads waited since it began. A deadline moves out by that much, and a
+it, and the pids it is given, and answers how long they waited since it
+began: the most of each process's threads, summed over the processes. A deadline moves out by that much, and a
 stopwatch leaves it out.
 
 Where nobody keeps that number (macOS) nothing has waited, and every
@@ -163,9 +163,22 @@ class Clock:
             self._last.update(self._read())
 
     def stalled(self) -> float:
-        "The most any watched thread has waited for a CPU since `start()`."
+        """
+        How long the watched processes waited for a CPU since `start()`:
+        the most of each process's threads, summed over the processes.
+
+        **Summed over processes, because work goes from one to the next.**
+        `upgrade-server` waits on the server, which waits on the
+        `check-snapshot` it runs. Each waits in turn, so the largest wait
+        alone left a loaded upgrade 10 s short of the 16 s it waited
+        (Lillecarl/pyterm#1000). **The most per process**, because its
+        threads run side by side: two waiting at once lose the time once.
+        """
         self._last.update(self._read())
-        return max((waited - self._first.get(key, 0.0) for key, waited in self._last.items()), default=0.0)
+        most: dict[int, float] = {}
+        for (pid, tid), waited in self._last.items():
+            most[pid] = max(most.get(pid, 0.0), waited - self._first.get((pid, tid), 0.0))
+        return sum(most.values())
 
     def waited(self) -> float:
         "What every watched thread waited for a CPU since `start()`, together."
@@ -213,7 +226,7 @@ class Deadline:
 
 class Stopwatch:
     """
-    Time gone by, less the most any watched thread waited for a CPU: what
+    Time gone by, less what `Clock.stalled` says the processes waited: what
     a budget measures, with the machine's load left out.
     """
 
