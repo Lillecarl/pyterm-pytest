@@ -38,6 +38,13 @@ of them need the same thing:
   run against one, and complain at a difference in either direction.
   Three copies of that reader exist in the collection today.
   Lillecarl/pyterm#279.
+* **fairclock** -- deadlines and stopwatches that count only the time
+  the watched processes could run on a CPU, so the machine's load
+  cannot fail a test. It reads each thread's run-queue time from
+  `/proc` (wall time where there is none, as on macOS).
+  `fairclock.asyncio`, `fairclock.anyio` and `fairclock.trio` stand in
+  for those libraries' own timeouts. It imports the standard library
+  only, so it can leave this package whole. Lillecarl/pyterm#1000.
 
 ## The ceiling
 
