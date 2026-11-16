@@ -25,13 +25,14 @@ class FairTimeoutExpired(subprocess.TimeoutExpired):
         self.wall = clock.elapsed()
         self.most = clock.stalled()
         self.together = clock.waited()
+        self.ran = clock.ran()
+        self.io = clock.io_waited()
 
     def __str__(self) -> str:
-        return "%s: %.1f s of wall time, %.1f s of it forgiven as waits for a CPU (every thread's: %.1f s)" % (
-            super().__str__(),
-            self.wall,
-            self.most,
-            self.together,
+        return (
+            "%s: %.1f s of wall time, %.1f s of it forgiven as waits for a CPU (every thread's: %.1f s;"
+            " %.1f s on a CPU and %.1f s waiting for block I/O, not forgiven)"
+            % (super().__str__(), self.wall, self.most, self.together, self.ran, self.io)
         )
 
 

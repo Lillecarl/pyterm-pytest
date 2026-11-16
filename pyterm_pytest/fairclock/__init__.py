@@ -27,7 +27,7 @@ import time
 from collections.abc import Iterable
 from pathlib import Path
 
-__all__ = ["MOST", "SAMPLE", "Clock", "Deadline", "Stopwatch", "pids_naming", "run_delays"]
+__all__ = ["MOST", "SAMPLE", "Clock", "Deadline", "Stopwatch", "pids_naming", "run_delays", "task_times"]
 
 #: However loaded the machine, a deadline ends by this many times its
 #: seconds. A process the machine never runs is a hang as well.
@@ -54,6 +54,31 @@ def run_delays(pid: int | str = "self") -> dict[int, float]:
         except OSError, IndexError, ValueError:
             continue
     return found
+
+
+def task_times(pid: int | str = "self") -> dict[int, tuple[float, float]]:
+    """
+    The seconds each thread of `pid` ran on a CPU, and waited for block
+    I/O, by thread id: fields 14 and 15 of its stat, and 42
+    (`delayacct_blkio_ticks`, zero while `kernel.task_delayacct` is off).
+    """
+    found = {}
+    try:
+        tasks = list((PROC / str(pid) / "task").iterdir())
+    except OSError:
+        return found
+    for task in tasks:
+        try:
+            stat = (task / "stat").read_text()
+            # The fields after the name in parentheses start at 3.
+            fields = stat[stat.rindex(")") + 2 :].split()
+            found[int(task.name)] = ((int(fields[11]) + int(fields[12])) / _TICK, int(fields[39]) / _TICK)
+        except OSError, IndexError, ValueError:
+            continue
+    return found
+
+
+_TICK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
 
 
 def _parents() -> dict[int, int]:
@@ -144,6 +169,8 @@ class Clock:
         self._last: dict[tuple[int, int], float] = {}
         self.began = time.monotonic()
         self._read_at = -SAMPLE
+        self._times_first: dict[tuple[int, int], tuple[float, float]] = {}
+        self._times_last: dict[tuple[int, int], tuple[float, float]] = {}
 
     def _read(self) -> dict[tuple[int, int], float]:
         self._read_at = time.monotonic()
@@ -151,16 +178,43 @@ class Clock:
             return {}
         return {(pid, tid): waited for pid in _under(self._roots) for tid, waited in run_delays(pid).items()}
 
+    def _read_times(self) -> dict[tuple[int, int], tuple[float, float]]:
+        if not PROC.is_dir():
+            return {}
+        return {(pid, tid): times for pid in _under(self._roots) for tid, times in task_times(pid).items()}
+
     def start(self) -> Clock:
         "Take the first reading. The time counts from the clock's making, which a late start does not move."
         self._first = self._read()
         self._last = dict(self._first)
+        self._times_first = self._read_times()
+        self._times_last = dict(self._times_first)
         return self
 
     def sample(self) -> None:
         "Read /proc, unless it was read less than `SAMPLE` seconds ago."
         if time.monotonic() - self._read_at >= SAMPLE:
             self._last.update(self._read())
+            self._times_last.update(self._read_times())
+
+    def _times_since(self, which: int) -> float:
+        self._times_last.update(self._read_times())
+        return sum(
+            times[which] - self._times_first.get(key, (0.0, 0.0))[which] for key, times in self._times_last.items()
+        )
+
+    def ran(self) -> float:
+        """
+        What every watched thread ran on a CPU since `start()`, together.
+        With `io_waited`, a figure for a failure message only: it says
+        whether time no wait explains went to slower work or to sleep.
+        Lillecarl/pyterm#1000.
+        """
+        return self._times_since(0)
+
+    def io_waited(self) -> float:
+        "What every watched thread waited for block I/O since `start()`, together. Not forgiven."
+        return self._times_since(1)
 
     def stalled(self) -> float:
         """
@@ -217,10 +271,10 @@ class Deadline:
         return self.clock.left(self.seconds) <= 0
 
     def __str__(self) -> str:
-        return "%.1f s, and %.1f s more that the processes waited for a CPU (%.1f s summed over every thread)" % (
-            self.seconds,
-            self.clock.stalled(),
-            self.clock.waited(),
+        return (
+            "%.1f s, and %.1f s more that the processes waited for a CPU (%.1f s summed over every thread;"
+            " %.1f s on a CPU and %.1f s waiting for block I/O, not forgiven)"
+            % (self.seconds, self.clock.stalled(), self.clock.waited(), self.clock.ran(), self.clock.io_waited())
         )
 
 

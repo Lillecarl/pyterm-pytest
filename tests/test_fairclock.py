@@ -23,7 +23,7 @@ import pytest
 import trio
 
 from pyterm_pytest import fairclock
-from pyterm_pytest.fairclock import Clock, Deadline, Stopwatch, pids_naming, run_delays
+from pyterm_pytest.fairclock import Clock, Deadline, Stopwatch, pids_naming, run_delays, task_times
 from pyterm_pytest.fairclock import anyio as fair_anyio
 from pyterm_pytest.fairclock import asyncio as fair_asyncio
 from pyterm_pytest.fairclock import subprocess as fair_subprocess
@@ -41,6 +41,24 @@ def test_each_thread_says_how_long_it_waited():
     ours = {thread.native_id for thread in threading.enumerate() if thread.native_id is not None}
     assert ours <= set(waited), waited
     assert all(seconds >= 0 for seconds in waited.values())
+
+
+def test_each_thread_says_how_long_it_ran_and_waited_for_the_disk():
+    "Never forgiven, only reported. The disk is zero where delay accounting is off."
+    if not LINUX:
+        assert task_times() == {}
+        return
+    times = task_times()
+    ours = {thread.native_id for thread in threading.enumerate() if thread.native_id is not None}
+    assert ours <= set(times), times
+    assert all(ran >= 0 and io >= 0 for ran, io in times.values())
+
+    clock = Clock().start()
+    spun = time.process_time() + 0.3
+    while time.process_time() < spun:
+        pass
+    assert clock.ran() >= 0.2
+    assert clock.io_waited() >= 0
 
 
 def test_an_idle_machine_ends_it_on_time():
