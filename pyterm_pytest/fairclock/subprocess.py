@@ -11,7 +11,7 @@ import subprocess
 from collections.abc import Iterable, Sequence
 from typing import Any
 
-from . import Clock
+from . import SAMPLE, Clock
 from ._watch import FLOOR
 
 __all__ = ["FairTimeoutExpired", "run"]
@@ -55,7 +55,8 @@ def run(
     with subprocess.Popen(args, stdin=subprocess.PIPE if input is not None else None, **popen) as process:
         while True:
             try:
-                stdout, stderr = process.communicate(input, timeout=max(FLOOR, clock.left(seconds)))
+                # In steps of `SAMPLE`, so the clock reads the children that come and go.
+                stdout, stderr = process.communicate(input, timeout=max(FLOOR, min(SAMPLE, clock.left(seconds))))
                 break
             except subprocess.TimeoutExpired:
                 # `communicate` takes a second call after a timeout, and

@@ -286,6 +286,20 @@ def test_a_command_that_hangs_is_killed_on_time():
 
 
 @needs_proc
+def test_a_process_that_came_and_went_before_the_deadline_still_counts():
+    "An upgrade's `check-snapshot` starts and ends inside the wait. Lillecarl/pyterm#1000."
+    cpu = min(os.sched_getaffinity(0))
+    clock = Clock().start()
+    with _crowded(cpu, spinners=4):
+        child = subprocess.Popen([sys.executable, "-c", WORK % (cpu, 0.15)])
+        while child.poll() is None:
+            clock.left(60)
+            time.sleep(0.05)
+    # Every child has gone, so only what the clock sampled can say this.
+    assert clock.stalled() > 0.1
+
+
+@needs_proc
 def test_a_starved_command_still_ends():
     "As the starved child above, through `run`: 0.15 s of CPU at a fifth of one CPU, against 0.5 s."
     cpu = min(os.sched_getaffinity(0))

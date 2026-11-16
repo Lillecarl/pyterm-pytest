@@ -27,13 +27,18 @@ import time
 from collections.abc import Iterable
 from pathlib import Path
 
-__all__ = ["MOST", "Clock", "Deadline", "Stopwatch", "pids_naming", "run_delays"]
+__all__ = ["MOST", "SAMPLE", "Clock", "Deadline", "Stopwatch", "pids_naming", "run_delays"]
 
 #: However loaded the machine, a deadline ends by this many times its
 #: seconds. A process the machine never runs is a hang as well.
 MOST = 10
 
 PROC = Path("/proc")
+
+#: How often a clock reads /proc while it waits, in seconds. A process
+#: that starts and ends between two readings is never counted: the
+#: `check-snapshot` an upgrade runs lives a few seconds.
+SAMPLE = 0.25
 
 
 def run_delays(pid: int | str = "self") -> dict[int, float]:
@@ -138,8 +143,10 @@ class Clock:
         self._first: dict[tuple[int, int], float] = {}
         self._last: dict[tuple[int, int], float] = {}
         self.began = time.monotonic()
+        self._read_at = -SAMPLE
 
     def _read(self) -> dict[tuple[int, int], float]:
+        self._read_at = time.monotonic()
         if not PROC.is_dir():
             return {}
         return {(pid, tid): waited for pid in _under(self._roots) for tid, waited in run_delays(pid).items()}
@@ -149,6 +156,11 @@ class Clock:
         self._first = self._read()
         self._last = dict(self._first)
         return self
+
+    def sample(self) -> None:
+        "Read /proc, unless it was read less than `SAMPLE` seconds ago."
+        if time.monotonic() - self._read_at >= SAMPLE:
+            self._last.update(self._read())
 
     def stalled(self) -> float:
         "The most any watched thread has waited for a CPU since `start()`."
@@ -167,12 +179,12 @@ class Clock:
         """
         What is left of `seconds` of time the watched threads could run,
         `MOST` times `seconds` at most. Before `seconds` have gone by it
-        answers without reading /proc: a stall only adds time, so the
-        plain remainder is a floor, and a wait that ends in time pays
-        for no reading.
+        answers the plain remainder, a floor, and only samples: a thread
+        that ends before the deadline must still be counted at it.
         """
         elapsed = self.elapsed()
         if elapsed < seconds:
+            self.sample()
             return seconds - elapsed
         return min(seconds + self.stalled(), seconds * MOST) - elapsed
 
