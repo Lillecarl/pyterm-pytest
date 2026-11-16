@@ -26,6 +26,7 @@ from pyterm_pytest import fairclock
 from pyterm_pytest.fairclock import Clock, Deadline, Stopwatch, pids_naming, run_delays
 from pyterm_pytest.fairclock import anyio as fair_anyio
 from pyterm_pytest.fairclock import asyncio as fair_asyncio
+from pyterm_pytest.fairclock import subprocess as fair_subprocess
 from pyterm_pytest.fairclock import trio as fair_trio
 
 LINUX = Path("/proc/self/task").is_dir()
@@ -180,7 +181,14 @@ def test_an_outer_cancellation_is_not_a_timeout():
 
 def test_the_package_reaches_only_its_own_front_ends_library():
     "Each module imports the standard library, and a front end its own loop's library: it can leave pyterm whole."
-    allowed = {"__init__": set(), "_watch": set(), "asyncio": set(), "anyio": {"anyio"}, "trio": {"trio"}}
+    allowed = {
+        "__init__": set(),
+        "_watch": set(),
+        "asyncio": set(),
+        "subprocess": set(),
+        "anyio": {"anyio"},
+        "trio": {"trio"},
+    }
     here = Path(fairclock.__file__).parent
     for name, extra in allowed.items():
         tree = ast.parse((here / ("%s.py" % name)).read_text())
@@ -255,3 +263,30 @@ def test_a_starved_child_still_meets_its_deadline(front):
 async def _wall(child: subprocess.Popen) -> None:
     with anyio.fail_after(0.5):
         await _ended(child, anyio.sleep)
+
+
+def test_a_command_says_what_subprocess_run_would():
+    done = fair_subprocess.run(
+        [sys.executable, "-c", "import sys; print(sys.stdin.read()); sys.exit(3)"],
+        5,
+        input=b"echoed",
+        capture_output=True,
+    )
+    assert (done.returncode, done.stdout.strip()) == (3, b"echoed")
+    with pytest.raises(subprocess.CalledProcessError):
+        fair_subprocess.run([sys.executable, "-c", "raise SystemExit(3)"], 5, check=True)
+
+
+def test_a_command_that_hangs_is_killed_on_time():
+    began = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        fair_subprocess.run([sys.executable, "-c", "import time; time.sleep(30)"], 0.3, capture_output=True)
+    assert time.monotonic() - began < 2
+
+
+@needs_proc
+def test_a_starved_command_still_ends():
+    "As the starved child above, through `run`: 0.15 s of CPU at a fifth of one CPU, against 0.5 s."
+    cpu = min(os.sched_getaffinity(0))
+    with _crowded(cpu, spinners=4):
+        assert fair_subprocess.run([sys.executable, "-c", WORK % (cpu, 0.15)], 0.5).returncode == 0

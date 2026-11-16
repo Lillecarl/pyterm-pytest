@@ -16,6 +16,7 @@ deadline is a wall-clock one.
 The standard library only, so this package can leave pyterm whole. The
 front ends for an event loop are `fairclock.asyncio`, `fairclock.anyio`
 and `fairclock.trio`; each imports its own library and no other.
+`fairclock.subprocess.run` is `subprocess.run` with a fair timeout.
 Lillecarl/pyterm#1000.
 """
 
