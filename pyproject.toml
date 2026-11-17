@@ -45,14 +45,10 @@ docs = ["sphinx", "myst-parser", "furo"]
 # package does. The ceiling imports every module, so the suite that judges
 # it needs pywayland on the path -- and a repository that only wants a seat
 # fixture should not install a Wayland binding to get one.
-#
-# anyio and trio for the same reason: `fairclock.anyio` and
-# `fairclock.trio` import them, and its own tests run every front end.
 test = [
     "anyio",
     "pytest",
     "pywayland",
-    "trio",
 ]
 
 [project.urls]

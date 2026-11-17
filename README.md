@@ -38,13 +38,11 @@ of them need the same thing:
   run against one, and complain at a difference in either direction.
   Three copies of that reader exist in the collection today.
   Lillecarl/pyterm#279.
-* **fairclock** -- deadlines and stopwatches that count only the time
-  the watched processes could run on a CPU, so the machine's load
-  cannot fail a test. It reads each thread's run-queue time from
-  `/proc` (wall time where there is none, as on macOS).
-  `fairclock.asyncio`, `fairclock.anyio` and `fairclock.trio` stand in
-  for those libraries' own timeouts. It imports the standard library
-  only, so it can leave this package whole. Lillecarl/pyterm#1000.
+
+Fair deadlines, which leave the machine's load out, are a source of
+their own: [fairclock](https://lillecarl.github.io/fairclock/). It
+imports the standard library alone, so a suite below this package's
+floor takes it too. Lillecarl/pyterm#1008.
 
 ## The ceiling
 
@@ -89,6 +87,7 @@ each source claims one job:
 | [pyterm-pytest](https://lillecarl.github.io/pyterm-pytest/) | the test equipment the suites share |
 | [deferimport](https://lillecarl.github.io/deferimport/) | make imports lazy, without a keyword |
 | [ptkhx](https://lillecarl.github.io/ptkhx/) | Helix's modal editing, for a prompt_toolkit buffer |
+| [fairclock](https://lillecarl.github.io/fairclock/) | deadlines that leave the machine's load out |
 
 [pyterm's site](https://lillecarl.github.io/pyterm/) holds every source's
 docs.
