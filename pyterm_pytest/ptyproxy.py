@@ -46,6 +46,7 @@ from pathlib import Path
 
 import anyio
 import anyio.abc
+from fairclock import anyio as fair_anyio
 from ptyhost.backends.posix import PosixBackend
 from ptyhost.spawn import Spawn
 from pyte import Screen, Stream
@@ -188,12 +189,12 @@ class Application:
     async def shows(self, text: str, seconds: float = WAIT) -> None:
         "Until a row of the parsed screen holds `text`."
         try:
-            with anyio.fail_after(seconds):
+            with fair_anyio.fail_after(seconds):
                 while not any(text in row for row in self.parsed.rows()):
                     await self._changed.wait()
-        except TimeoutError:
+        except TimeoutError as reason:
             rows = "\n".join(self.parsed.rows())
-            raise TimeoutError("%r never showed, after %.0f s:\n%s" % (text, seconds, rows)) from None
+            raise TimeoutError("%r never showed, %s:\n%s" % (text, reason, rows)) from None
 
     def _resize(self, rows: int, columns: int) -> None:
         self.backend.set_size(columns, rows)
@@ -261,11 +262,11 @@ class Proxy:
     async def until(self, holds: Callable[[], bool], what: str, seconds: float = WAIT) -> None:
         "Until `holds()` is true after some change, or fail saying `what`."
         try:
-            with anyio.fail_after(seconds):
+            with fair_anyio.fail_after(seconds):
                 while not holds():
                     await self._changed.wait()
-        except TimeoutError:
-            raise TimeoutError("%s, after %.0f s: %s" % (what, seconds, self.describe())) from None
+        except TimeoutError as reason:
+            raise TimeoutError("%s, %s: %s" % (what, reason, self.describe())) from None
 
     def describe(self) -> str:
         return (

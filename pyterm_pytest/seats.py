@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import anyio.from_thread
+from fairclock import anyio as fair_anyio
 from PIL import Image, ImageChops
 
 from .ptyproxy import RESET, Proxy, answers_from
@@ -807,7 +808,7 @@ def named_command(command, name, script):
 
 
 async def _until_it_ends(application, seconds):
-    with anyio.fail_after(seconds):
+    with fair_anyio.fail_after(seconds):
         await application.ended.wait()
 
 

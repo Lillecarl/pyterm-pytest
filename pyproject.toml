@@ -21,6 +21,9 @@ requires-python = ">=3.14"
 # nothing (Lillecarl/pyterm#370), and a library that hands over the
 # pixels is the only way to be sure what was measured.
 dependencies = [
+    # The proxy's waits count only the time the terminals could run, so
+    # a gate's load does not fail them. Lillecarl/pyterm#1019.
+    "fairclock",
     "pillow",
     # The proxy's server runs the application on a pty through ptyhost,
     # and takes anyio from it; it parses what the application wrote with
@@ -352,4 +355,4 @@ select = [
 # an installed sibling sorts one way in the dev shell and the other
 # in the sandbox.
 known-first-party = ["pyterm_pytest"]
-known-third-party = ["ptyhost", "pyte"]
+known-third-party = ["fairclock", "ptyhost", "pyte"]
