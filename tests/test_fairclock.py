@@ -197,6 +197,24 @@ def test_an_outer_cancellation_is_not_a_timeout():
     assert anyio.run(main) == "outer"
 
 
+@fronts
+def test_a_thousand_short_scopes_share_one_thread(front):
+    """
+    A thread per scope read every thread before it: a pymux helper that
+    bounds each frame paid 40 ms a scope. Lillecarl/pyterm#1000.
+    """
+    run, bound, sleep, _expired = FRONTS[front]
+
+    async def scopes() -> float:
+        began = time.monotonic()
+        for _ in range(1000):
+            await bound(10, lambda: sleep(0))
+        return time.monotonic() - began
+
+    assert run(scopes()) < 1.0
+    assert sum(thread.name == "fairclock" for thread in threading.enumerate()) <= 1
+
+
 def test_the_package_reaches_only_its_own_front_ends_library():
     "Each module imports the standard library, and a front end its own loop's library: it can leave pyterm whole."
     allowed = {

@@ -8,21 +8,35 @@ and a task group wraps the body's error in an ExceptionGroup, so the
 front ends could not be a plain `with` like the timeouts they stand in
 for.
 
-The thread never waits on the loop. It posts the expiry and goes, so a
+**One thread for every watch in the process, not one each.** A reading
+walks every thread under this process, so a thread per watch made each
+new watch read the ones before it: a helper that bounds every frame
+held thousands open, at 40 ms a scope. Lillecarl/pyterm#1000.
+
+**A watch's clock starts late**, after `START` of its seconds, so a
+scope that ends sooner reads nothing. What its processes waited before
+that is not forgiven, which errs strict.
+
+The thread never waits on a loop. It posts the expiry and goes, so a
 loop that is busy elsewhere cannot hold it, and nothing joins it.
 """
 
 from __future__ import annotations
 
 import contextlib
+import math
 import threading
+import time
 from collections.abc import Callable, Iterable
 
-from . import Clock
+from . import SAMPLE, Clock
 
 #: The shortest sleep between two readings: a deadline that is nearly
 #: over is not read in a tight loop.
 FLOOR = 0.01
+
+#: The part of its seconds a watch waits before its first reading.
+START = 0.5
 
 
 class Watch:
@@ -42,21 +56,27 @@ class Watch:
         self.seconds = seconds
         self.clock = Clock(pids)
         self.expired = False
+        self.started = False
+        self.starts_at = self.clock.began + min(SAMPLE, seconds * START)
         self._post = post
         self._expire = expire
         self._closed = False
-        self._stop = threading.Event()
-        threading.Thread(target=self._run, name="fairclock", daemon=True).start()
+        _SAMPLER.add(self)
 
-    def _run(self) -> None:
-        # The first reading is off the loop's thread: it walks /proc.
-        self.clock.start()
-        while not self._stop.wait(max(FLOOR, self.clock.left(self.seconds))):
-            if self.clock.left(self.seconds) <= 0:
-                # A RuntimeError says the loop closed: nothing is left to cancel.
-                with contextlib.suppress(RuntimeError):
-                    self._post(self._on_loop)
-                return
+    def due(self, now: float) -> float | None:
+        "On the sampler's thread: seconds until this watch is next read, or None once it has expired."
+        if not self.started:
+            if now < self.starts_at:
+                return self.starts_at - now
+            self.clock.start()
+            self.started = True
+        left = self.clock.left(self.seconds)
+        if left > 0:
+            return max(FLOOR, left)
+        # A RuntimeError says the loop closed: nothing is left to cancel.
+        with contextlib.suppress(RuntimeError):
+            self._post(self._on_loop)
+        return None
 
     def _on_loop(self) -> None:
         if not self._closed:
@@ -66,7 +86,60 @@ class Watch:
     def close(self) -> None:
         "On the loop's thread, as the body leaves: an expiry still in flight does nothing."
         self._closed = True
-        self._stop.set()
+        _SAMPLER.remove(self)
 
     def __str__(self) -> str:
-        return "%g s, and %.1f s more that the processes waited for a CPU" % (self.seconds, self.clock.stalled())
+        stalled = self.clock.stalled() if self.started else 0.0
+        return "%g s, and %.1f s more that the processes waited for a CPU" % (self.seconds, stalled)
+
+
+class _Sampler:
+    "The one thread that reads every open watch, and ends when none is open."
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._watches: set[Watch] = set()
+        self._wake = threading.Event()
+        self._thread: threading.Thread | None = None
+        # When the thread next wakes on its own; a watch due sooner wakes it.
+        self._until = 0.0
+
+    def add(self, watch: Watch) -> None:
+        with self._lock:
+            self._watches.add(watch)
+            if self._thread is None or not self._thread.is_alive():
+                self._until = watch.starts_at
+                self._thread = threading.Thread(target=self._run, name="fairclock", daemon=True)
+                self._thread.start()
+                return
+            if watch.starts_at < self._until:
+                self._wake.set()
+
+    def remove(self, watch: Watch) -> None:
+        with self._lock:
+            self._watches.discard(watch)
+
+    def _run(self) -> None:
+        while True:
+            with self._lock:
+                watches = list(self._watches)
+                if not watches:
+                    self._thread = None
+                    return
+                # Until it sleeps again, every new watch wakes it.
+                self._until = math.inf
+                self._wake.clear()
+            now = time.monotonic()
+            sleep = SAMPLE
+            for watch in watches:
+                due = watch.due(now)
+                if due is None:
+                    self.remove(watch)
+                else:
+                    sleep = min(sleep, due)
+            with self._lock:
+                self._until = time.monotonic() + sleep
+            self._wake.wait(sleep)
+
+
+_SAMPLER = _Sampler()
